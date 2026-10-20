@@ -1,0 +1,26 @@
+[project]
+name = "snapgen-mcp"
+version = "0.1.0"
+description = "MCP server for snapgen.ai image and video generation"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2,<2",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "respx"]
+
+[project.scripts]
+snapgen-mcp = "snapgen_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

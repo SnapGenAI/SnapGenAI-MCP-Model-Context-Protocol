@@ -7,7 +7,7 @@ truth, and a false local rejection is worse than a clear backend error.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .client import SnapGenError
@@ -298,14 +298,16 @@ _KLING = {  # id: (summary, modes, duration param or None, needs ref video, desc
                         P("int", min=3, max=15), False),
     "kling-video-2-1-5s": ("Kling 2.1, fixed 5s.", ("standard", "professional"), P("int", choices=(5,)), False),
     "kling-video-2-1-10s": ("Kling 2.1, fixed 10s.", ("standard", "professional"), P("int", choices=(10,)), False),
-    "kling-video-1-6-5s": ("Kling 1.6, fixed 5s.", ("standard", "professional"), P("int", choices=(5,)), False),
-    "kling-video-1-6-10s": ("Kling 1.6, fixed 10s.", ("standard", "professional"), P("int", choices=(10,)), False),
+    # kling-video-1-6-5s / -10s are in the docs but the backend has no service price for them in
+    # standard or professional mode (404 SERVICE_PRICE_NOT_FOUND, checked live 2026-10-20), so they are omitted.
     "kling-video-motion-3": ("Kling Motion Control 3: transfers motion from a reference video onto an image.",
                              ("standard", "professional"), None, True),
     "kling-video-motion": ("Kling Motion Control.", ("standard", "professional"), None, True),
     "kling-video-3-0-edit": ("Kling 3.0 Edit: edit an existing video with a prompt + key frame.",
                              ("standard", "professional"), None, True),
 }
+# Verified live 2026-10-20: these reject text-only requests ("Please attach an image").
+_KLING_NEEDS_IMAGE = {"kling-video-2-5", "kling-video-2-1-5s", "kling-video-2-1-10s"}
 for _m, (_s, _modes, _dur, _needs_video) in _KLING.items():
     _p: dict[str, Param] = {
         "mode": P("str", "standard = 720p, professional = 1080p.", choices=_modes, default="standard"),
@@ -315,12 +317,13 @@ for _m, (_s, _modes, _dur, _needs_video) in _KLING.items():
         _p["duration"] = _dur
     _add(ModelSpec(
         id=_m, family="kling", kind="video", endpoint="/video-gen/kling", send_model=_m, summary=_s,
-        params=_p, image_urls=Refs("ref_images", 4),
+        params=_p, image_urls=Refs("ref_images", 4, min=1 if _m in _KLING_NEEDS_IMAGE else 0),
         video_urls=Refs("ref_videos", 1, min=1 if _needs_video else 0),
         min_prompt_len=10,
         notes=("Requires one reference video (reference_video_urls); duration follows that video. "
                "A reference image is recommended." if _needs_video else
-               "Prompt must be at least 10 characters. Reference videos are optional."),
+               "Prompt must be at least 10 characters. Reference videos are optional."
+               + (" REQUIRES at least one reference image (image-to-video only)." if _m in _KLING_NEEDS_IMAGE else "")),
     ))
 
 # ---------------------------------------------------------------- video: others
@@ -367,6 +370,33 @@ _add(ModelSpec(
     image_urls=Refs("file_urls", 1), history=Refs("ref_history", 1), exclusive_refs=True,
     notes="At most ONE reference (image URL or image history uuid). Resolution is fixed.",
 ))
+
+
+# ---------------------------------------------------------------- observed pricing
+# Estimated credits returned by the live API on 2026-10-20 at the cheapest settings. These are snapshots, not
+# a price list: the docs differ for some models and prices change. Always trust estimated_credit on submit.
+_OBSERVED = {
+    "nano-banana-pro": "~3 credits (1K)", "nano-banana-2": "~3 credits (1K)", "nano-banana-2-lite": "~3 credits (1K)",
+    "grok-image": "~4 credits (1 image, SPEED)", "gpt-image-2": "~3 credits (low, 1K)",
+    "gpt-image-2.5-lower": "~1 credit", "vela-image": "~1 credit",
+    "veo-3.1": "~100 credits (4s, 720p)", "veo-3.1-fast": "~4 credits (4s, 720p)",
+    "veo-3.1-lite": "~4 credits (4s, 720p)", "veo-2": "~20 credits (8s)", "omni-flash": "~15 credits (10s)",
+    "veo-extend": "~4 credits",
+    "grok-3": "~15 credits (6s, 480p)", "grok-lower": "~8 credits (6s, 480p)",
+    "grok-extend": "~15 credits", "grok-storyboard": "~15 credits per 6s scene (480p)",
+    "seedance-2-omni": "~108 credits (4s)", "seedance-2-mini": "~84 credits (4s)",
+    "seedance-2-5-omni": "~332 credits (4s)", "sd-2-lower": "~6 credits (5s)",
+    "minimax-h3": "~150 credits (5s)", "flux-3": "~170 credits (5s)",
+    "vela-ai-video": "~1 credit", "muse-ai-video": "~0 credits observed (may be promotional)",
+    "kling-video-3-0": "~55 credits (5s, standard)", "kling-video-2-6": "~30 credits (5s, standard)",
+    "kling-video-2-5": "~15 credits (5s, relax)", "kling-video-2-1-5s": "~35 credits (standard)",
+    "kling-video-2-1-10s": "~30 credits (standard)",
+    "kling-video-motion-3": "~100 credits (scales with the reference video length)",
+    "kling-video-motion": "~60 credits (scales with the reference video length)",
+    "kling-video-3-0-edit": "~120 credits (scales with the reference video length)",
+}
+for _id, _txt in _OBSERVED.items():
+    _REGISTRY[_id] = replace(_REGISTRY[_id], pricing=f"Observed estimate: {_txt}.")
 
 
 # ---------------------------------------------------------------- public API

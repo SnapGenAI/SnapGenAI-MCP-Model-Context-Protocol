@@ -36,7 +36,7 @@ def _summarize(h: dict) -> dict:
     status_desc = (h.get("status_desc") or "").upper()
     # Observed live: status 1 = processing, 2 = completed, 3 = failed (status_desc may be empty or free text).
     failed = bool(h.get("error_code")) or h.get("status") == 3 or status_desc in {"FAILED", "ERROR"}
-    done = not failed and (h.get("status") == 2 or status_desc == "COMPLETED" or h.get("status_percentage") == 100)
+    done = not failed and (h.get("status") == 2 or status_desc == "COMPLETED")
     out: dict[str, Any] = {
         "uuid": h.get("uuid"),
         "type": h.get("type"),

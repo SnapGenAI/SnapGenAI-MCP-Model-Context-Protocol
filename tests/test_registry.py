@@ -28,7 +28,7 @@ def test_every_spec_is_internally_consistent():
 
 def test_model_counts_and_families():
     models = registry.all_models()
-    assert len([m for m in models if m.kind in ("image", "video")]) == 34
+    assert len([m for m in models if m.kind in ("image", "video")]) == 32
     assert {m.family for m in models} == {"nano-banana", "grok", "gpt-image", "vela", "veo", "seedance",
                                           "kling", "minimax", "flux", "muse"}
 
@@ -156,3 +156,16 @@ def test_seedance_always_sends_mode():
     assert build("sd-2-lower")[1]["mode"] == "lower"
     assert build("seedance-2-omni")[1]["mode"] == "fast-vip"
     assert build("seedance-2-omni", options={"mode": "pro-vip"})[1]["mode"] == "pro-vip"
+
+
+def test_kling_image_required_models_and_removed_16():
+    with pytest.raises(SnapGenError, match="at least 1 reference images"):
+        build("kling-video-2-5")
+    assert build("kling-video-2-5", image_urls=["https://x/i.png"])[1]["ref_images"] == ["https://x/i.png"]
+    with pytest.raises(SnapGenError, match="Unknown model"):
+        registry.get_model("kling-video-1-6-5s")
+
+
+def test_every_priced_model_exists_and_has_observed_pricing():
+    assert registry.get_model("veo-3.1").pricing.startswith("Observed estimate")
+    assert "332" in registry.get_model("seedance-2-5-omni").pricing

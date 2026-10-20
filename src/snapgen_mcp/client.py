@@ -49,6 +49,8 @@ def _error_message(resp: httpx.Response) -> str:
 
     if code in ("API_KEY_REQUIRED", "API_KEY_NOT_FOUND") or resp.status_code == 401:
         return "Invalid or missing SNAPGEN_API_KEY. Create one at https://snapgen.ai/profile/integration/api-keys"
+    if code.endswith("PREMIUM_PLAN_REQUIRED"):
+        return "This model requires a Premium plan. Upgrade at " + TOP_UP_URL
     if code in ("NOT_ENOUGH_CREDIT", "NOT_ENOUGH_AND_LOCK_CREDIT"):
         return f"Not enough credits ({code}). Top up at {TOP_UP_URL}"
     if resp.status_code in (502, 503, 504):
@@ -90,11 +92,9 @@ class SnapGenClient:
     async def account(self) -> dict:
         return await self._request("GET", "/account")
 
-    async def generate_image(self, **fields: Any) -> dict:
-        return await self._request("POST", "/generate_image", data=_clean(fields))
-
-    async def generate_video_veo(self, **fields: Any) -> dict:
-        return await self._request("POST", "/video-gen/veo", data=_clean(fields))
+    async def submit(self, endpoint: str, fields: dict[str, Any]) -> dict:
+        """POST a generation request (form fields) to any uapi endpoint."""
+        return await self._request("POST", endpoint, data=_clean(fields))
 
     async def get_history(self, uuid: str) -> dict:
         return await self._request("GET", f"/history/{uuid}")

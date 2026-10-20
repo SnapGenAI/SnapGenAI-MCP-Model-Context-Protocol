@@ -1,16 +1,15 @@
 """snapgen.ai MCP server (local stdio MVP)."""
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import SnapGenClient
+from . import registry
+from .client import SnapGenClient, SnapGenError
 
 mcp = FastMCP("snapgen")
-
-IMAGE_MODELS = ["nano-banana-pro", "nano-banana-2", "nano-banana-2-lite"]
-VIDEO_MODELS = ["veo-3.1", "veo-3.1-fast", "veo-3.1-lite", "veo-2", "omni-flash"]
 
 _client: SnapGenClient | None = None
 
@@ -73,50 +72,110 @@ async def get_account() -> dict:
 
 
 @mcp.tool()
-async def list_models() -> dict:
-    """List the image and video models this server can use."""
-    return {"image_models": IMAGE_MODELS, "video_models": VIDEO_MODELS}
+async def list_models(kind: Literal["image", "video", "extend", "storyboard"] | None = None,
+                      family: str | None = None) -> dict:
+    """List available models, optionally filtered by kind (image, video, extend, storyboard) or family.
+
+    Families: nano-banana, grok, gpt-image, vela, veo, seedance, kling, minimax, flux, muse.
+    Use describe_model for a model's exact options before generating.
+    """
+    items = [
+        {"id": m.id, "family": m.family, "kind": m.kind, "premium": m.premium, "summary": m.summary}
+        for m in registry.all_models()
+        if (kind is None or m.kind == kind) and (family is None or m.family == family)
+    ]
+    return {"count": len(items), "models": items}
+
+
+@mcp.tool()
+async def describe_model(model: str) -> dict:
+    """Show one model's options (with allowed values), reference-media limits, pricing and notes."""
+    return registry.get_model(model).describe()
 
 
 @mcp.tool()
 async def generate_image(
     prompt: str,
     model: str = "nano-banana-pro",
-    aspect_ratio: Literal["1:1", "16:9", "9:16", "4:3", "3:4"] = "1:1",
-    resolution: Literal["1K", "2K", "4K"] = "1K",
-    style: str | None = None,
+    options: dict[str, Any] | None = None,
     reference_image_urls: list[str] | None = None,
+    reference_history_uuids: list[str] | None = None,
 ) -> dict:
     """Start an image generation. COSTS CREDITS: tell the user before calling.
 
-    Returns a job uuid immediately; poll get_generation for the image URL.
+    `options` holds model-specific settings such as aspect_ratio or resolution; call describe_model
+    first if unsure what a model accepts. Returns a job uuid; poll get_generation for the image URL(s).
     """
-    resp = await get_client().generate_image(
-        prompt=prompt, model=model, aspect_ratio=aspect_ratio, resolution=resolution,
-        style=style, file_urls=reference_image_urls,
-    )
-    return _job(resp)
+    spec = registry.get_model(model, "image")
+    endpoint, fields = registry.build_request(
+        spec, prompt, options, image_urls=reference_image_urls, history_uuids=reference_history_uuids)
+    return _job(await get_client().submit(endpoint, fields))
 
 
 @mcp.tool()
 async def generate_video(
     prompt: str,
     model: str = "veo-3.1-fast",
-    duration: Literal[4, 6, 8, 10] = 8,
-    resolution: Literal["720p", "1080p"] = "720p",
-    aspect_ratio: Literal["16:9", "9:16"] = "16:9",
+    options: dict[str, Any] | None = None,
     reference_image_urls: list[str] | None = None,
+    reference_video_urls: list[str] | None = None,
+    reference_audio_urls: list[str] | None = None,
+    reference_history_uuids: list[str] | None = None,
 ) -> dict:
-    """Start a video generation (Veo family). COSTS CREDITS: tell the user before calling.
+    """Start a video generation. COSTS CREDITS: tell the user before calling.
 
-    Duration 10 is only for omni-flash; veo-2 supports 720p only.
-    Returns a job uuid immediately; poll get_generation for the video URL.
+    `options` holds model-specific settings such as duration, resolution or aspect_ratio. Limits differ a
+    lot between models (Kling motion models REQUIRE a reference video), so call describe_model first
+    if unsure. Returns a job uuid; poll get_generation for the video URL. Videos take 1-5+ minutes.
     """
-    resp = await get_client().generate_video_veo(
-        prompt=prompt, model=model, duration=duration, resolution=resolution,
-        aspect_ratio=aspect_ratio, ref_images=reference_image_urls,
-    )
-    return _job(resp)
+    spec = registry.get_model(model, "video")
+    endpoint, fields = registry.build_request(
+        spec, prompt, options, image_urls=reference_image_urls, history_uuids=reference_history_uuids,
+        video_urls=reference_video_urls, audio_urls=reference_audio_urls)
+    return _job(await get_client().submit(endpoint, fields))
+
+
+@mcp.tool()
+async def extend_video(
+    model: Literal["veo-extend", "grok-extend", "grok-1.5-lite-extend", "seedance-extend"],
+    video_uuid: str,
+    prompt: str,
+    options: dict[str, Any] | None = None,
+) -> dict:
+    """Continue an existing video from its last frame. COSTS CREDITS: tell the user before calling.
+
+    `video_uuid` is the uuid of a completed video made with the matching family (veo, grok, seedance).
+    Describe what happens next in `prompt`. Returns a job uuid; poll get_generation.
+    """
+    spec = registry.get_model(model, "extend")
+    endpoint, fields = registry.build_request(spec, prompt, options, history_uuids=[video_uuid])
+    return _job(await get_client().submit(endpoint, fields))
+
+
+@mcp.tool()
+async def generate_storyboard(
+    scenes: list[dict[str, Any]],
+    aspect_ratio: Literal["landscape", "portrait", "square"] = "landscape",
+    resolution: Literal["480p", "720p"] = "480p",
+) -> dict:
+    """Make a multi-scene Grok video (2-10 scenes, max 45s total). COSTS CREDITS per scene.
+
+    Each scene is {"prompt": str, "duration": 6 or 10}. The last frame of each scene seeds the next,
+    and all clips are merged into one video. Returns a job uuid; poll get_generation.
+    """
+    if not 2 <= len(scenes) <= 10:
+        raise SnapGenError("A storyboard needs between 2 and 10 scenes.")
+    for i, sc in enumerate(scenes, 1):
+        if not str(sc.get("prompt", "")).strip():
+            raise SnapGenError(f"Scene {i} needs a prompt.")
+        if sc.get("duration") not in (6, 10):
+            raise SnapGenError(f"Scene {i}: duration must be 6 or 10 seconds.")
+    if sum(sc["duration"] for sc in scenes) > 45:
+        raise SnapGenError("Total storyboard duration cannot exceed 45 seconds.")
+    spec = registry.get_model("grok-storyboard", "storyboard")
+    fields = {"scenes": json.dumps(scenes), "model": spec.send_model,
+              "aspect_ratio": aspect_ratio, "resolution": resolution}
+    return _job(await get_client().submit(spec.endpoint, fields))
 
 
 @mcp.tool()

@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from .auth import CREATE_KEY_URL
+
 DEFAULT_BASE_URL = "https://api.snapgen.ai"
 TOP_UP_URL = "https://snapgen.ai/pricing"
 
@@ -48,7 +50,7 @@ def _error_message(resp: httpx.Response) -> str:
         pass
 
     if code in ("API_KEY_REQUIRED", "API_KEY_NOT_FOUND") or resp.status_code == 401:
-        return "Invalid or missing SNAPGEN_API_KEY. Create one at https://snapgen.ai/profile/integration/api-keys"
+        return f"Invalid or missing API key. Create one at {CREATE_KEY_URL} and send it in the x-api-key header."
     if code.endswith("PREMIUM_PLAN_REQUIRED"):
         return "This model requires a Premium plan. Upgrade at " + TOP_UP_URL
     if code in ("NOT_ENOUGH_CREDIT", "NOT_ENOUGH_AND_LOCK_CREDIT"):
@@ -64,7 +66,8 @@ def _error_message(resp: httpx.Response) -> str:
 class SnapGenClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
                  transport: httpx.AsyncBaseTransport | None = None, timeout: float = 60.0):
-        self.api_key = api_key or os.environ.get("SNAPGEN_API_KEY", "")
+        # None = stdio/dev mode: read the environment. An explicit key (even empty) never touches the environment.
+        self.api_key = api_key if api_key is not None else os.environ.get("SNAPGEN_API_KEY", "")
         self.base_url = (base_url or os.environ.get("SNAPGEN_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self._transport = transport
         self._timeout = timeout
@@ -72,8 +75,8 @@ class SnapGenClient:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         if not self.api_key:
             raise SnapGenError(
-                "SNAPGEN_API_KEY is not set. Create a key at "
-                "https://snapgen.ai/profile/integration/api-keys and set it in the MCP server env."
+                f"No API key configured. Create one at {CREATE_KEY_URL} and set SNAPGEN_API_KEY "
+                "(stdio) or send it in the x-api-key header (HTTP)."
             )
         async with httpx.AsyncClient(
             base_url=f"{self.base_url}/uapi/v1",

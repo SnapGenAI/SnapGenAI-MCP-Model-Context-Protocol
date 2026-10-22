@@ -24,3 +24,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = ["ignore:Use `streamable_http_client` instead.:DeprecationWarning"]

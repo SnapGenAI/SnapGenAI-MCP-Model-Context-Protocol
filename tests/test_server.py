@@ -63,13 +63,11 @@ async def test_insufficient_credit_message():
 async def test_bad_key():
     respx.get(f"{BASE}/account").mock(return_value=httpx.Response(
         404, json={"detail": {"error_code": "API_KEY_NOT_FOUND"}}))
-    with pytest.raises(SnapGenError, match="SNAPGEN_API_KEY"):
+    with pytest.raises(SnapGenError, match="Invalid or missing API key"):
         await server.get_account()
 
 
 async def test_missing_key(monkeypatch):
     monkeypatch.setattr(server, "_client", SnapGenClient(api_key=""))
-    monkeypatch.delenv("SNAPGEN_API_KEY", raising=False)
-    server._client.api_key = ""
-    with pytest.raises(SnapGenError, match="not set"):
+    with pytest.raises(SnapGenError, match="No API key configured"):
         await server.get_account()

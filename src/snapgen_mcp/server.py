@@ -1,24 +1,53 @@
-"""snapgen.ai MCP server (local stdio MVP)."""
+"""snapgen.ai MCP server: stdio for local use, streamable HTTP for hosting."""
 from __future__ import annotations
 
+import argparse
 import json
+import os
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
 
 from . import registry
+from .auth import MISSING_KEY_MESSAGE, extract_api_key
 from .client import SnapGenClient, SnapGenError
 
-mcp = FastMCP("snapgen")
+# Stateless: every HTTP request is self-contained (it carries its own key), so no session affinity is needed
+# and the server can sit behind any load balancer. These settings only affect the HTTP transport.
+mcp = FastMCP("snapgen", stateless_http=True, json_response=True)
 
-_client: SnapGenClient | None = None
+_client: SnapGenClient | None = None  # stdio / dev only
 
 
-def get_client() -> SnapGenClient:
+def _http_request(ctx: Context | None) -> Request | None:
+    """The incoming HTTP request when running over HTTP, else None (stdio, or called outside a request)."""
+    if ctx is None:
+        return None
+    try:
+        return ctx.request_context.request  # type: ignore[return-value]
+    except ValueError:
+        return None
+
+
+def get_client(ctx: Context | None = None) -> SnapGenClient:
+    """Client for this call. Over HTTP the key comes from the request and only from the request."""
+    request = _http_request(ctx)
+    if request is not None:
+        key = extract_api_key(request.headers)
+        if not key:
+            raise SnapGenError(MISSING_KEY_MESSAGE)
+        return SnapGenClient(api_key=key)
     global _client
     if _client is None:
         _client = SnapGenClient()
     return _client
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_: Request) -> PlainTextResponse:
+    return PlainTextResponse("OK")
 
 
 def _job(resp: dict) -> dict:
@@ -59,9 +88,9 @@ def _summarize(h: dict) -> dict:
 
 
 @mcp.tool()
-async def get_account() -> dict:
+async def get_account(ctx: Context | None = None) -> dict:
     """Show the connected snapgen.ai account: plan and credit balance (available and locked)."""
-    acct = await get_client().account()
+    acct = await get_client(ctx).account()
     credit = acct.get("user_credit") or {}
     return {
         "name": acct.get("full_name"),
@@ -100,6 +129,7 @@ async def generate_image(
     options: dict[str, Any] | None = None,
     reference_image_urls: list[str] | None = None,
     reference_history_uuids: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Start an image generation. COSTS CREDITS: tell the user before calling.
 
@@ -109,7 +139,7 @@ async def generate_image(
     spec = registry.get_model(model, "image")
     endpoint, fields = registry.build_request(
         spec, prompt, options, image_urls=reference_image_urls, history_uuids=reference_history_uuids)
-    return _job(await get_client().submit(endpoint, fields))
+    return _job(await get_client(ctx).submit(endpoint, fields))
 
 
 @mcp.tool()
@@ -121,6 +151,7 @@ async def generate_video(
     reference_video_urls: list[str] | None = None,
     reference_audio_urls: list[str] | None = None,
     reference_history_uuids: list[str] | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Start a video generation. COSTS CREDITS: tell the user before calling.
 
@@ -132,7 +163,7 @@ async def generate_video(
     endpoint, fields = registry.build_request(
         spec, prompt, options, image_urls=reference_image_urls, history_uuids=reference_history_uuids,
         video_urls=reference_video_urls, audio_urls=reference_audio_urls)
-    return _job(await get_client().submit(endpoint, fields))
+    return _job(await get_client(ctx).submit(endpoint, fields))
 
 
 @mcp.tool()
@@ -141,6 +172,7 @@ async def extend_video(
     video_uuid: str,
     prompt: str,
     options: dict[str, Any] | None = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Continue an existing video from its last frame. COSTS CREDITS: tell the user before calling.
 
@@ -149,7 +181,7 @@ async def extend_video(
     """
     spec = registry.get_model(model, "extend")
     endpoint, fields = registry.build_request(spec, prompt, options, history_uuids=[video_uuid])
-    return _job(await get_client().submit(endpoint, fields))
+    return _job(await get_client(ctx).submit(endpoint, fields))
 
 
 @mcp.tool()
@@ -157,6 +189,7 @@ async def generate_storyboard(
     scenes: list[dict[str, Any]],
     aspect_ratio: Literal["landscape", "portrait", "square"] = "landscape",
     resolution: Literal["480p", "720p"] = "480p",
+    ctx: Context | None = None,
 ) -> dict:
     """Make a multi-scene Grok video (2-10 scenes, max 45s total). COSTS CREDITS per scene.
 
@@ -175,21 +208,22 @@ async def generate_storyboard(
     spec = registry.get_model("grok-storyboard", "storyboard")
     fields = {"scenes": json.dumps(scenes), "model": spec.send_model,
               "aspect_ratio": aspect_ratio, "resolution": resolution}
-    return _job(await get_client().submit(spec.endpoint, fields))
+    return _job(await get_client(ctx).submit(spec.endpoint, fields))
 
 
 @mcp.tool()
-async def get_generation(uuid: str) -> dict:
+async def get_generation(uuid: str, ctx: Context | None = None) -> dict:
     """Check a generation by uuid. When done is true, image_urls or video_urls hold the results."""
-    return _summarize(await get_client().get_history(uuid))
+    return _summarize(await get_client(ctx).get_history(uuid))
 
 
 @mcp.tool()
 async def list_generations(
-    type: Literal["all", "image", "video"] = "all", page: int = 1, per_page: int = 10
+    type: Literal["all", "image", "video"] = "all", page: int = 1, per_page: int = 10,
+    ctx: Context | None = None,
 ) -> dict:
     """List recent generations, newest first."""
-    resp = await get_client().list_histories(filter_by=type, page=page, items_per_page=per_page)
+    resp = await get_client(ctx).list_histories(filter_by=type, page=page, items_per_page=per_page)
     return {
         "total": resp.get("total"),
         "items": [
@@ -200,8 +234,21 @@ async def list_generations(
     }
 
 
-def main() -> None:
-    mcp.run()  # stdio
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="snapgen-mcp", description="SnapGen MCP server")
+    parser.add_argument("--transport", choices=["stdio", "http"],
+                        default=os.environ.get("SNAPGEN_MCP_TRANSPORT", "stdio"),
+                        help="stdio (local, key from SNAPGEN_API_KEY) or http (hosted, key from each request)")
+    parser.add_argument("--host", default=os.environ.get("SNAPGEN_MCP_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("SNAPGEN_MCP_PORT", "8000")))
+    args = parser.parse_args(argv)
+
+    if args.transport == "http":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="streamable-http")  # endpoint: /mcp, health check: /health
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":

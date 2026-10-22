@@ -1,7 +1,11 @@
 # snapgen-mcp
 
-Local MCP server (stdio) for snapgen.ai image and video generation. It is a thin adapter over the
+MCP server for snapgen.ai image and video generation, for developers using Claude Code, Codex, Cursor
+and similar clients. It runs locally over stdio or hosted over streamable HTTP. It is a thin adapter over the
 snapgen.ai User API: auth, pricing, credit locking and billing all stay in the backend.
+
+Authentication is your existing SnapGen API key. There is no OAuth: over HTTP you send the key as a header on
+every request and the server forwards it to the API unchanged.
 
 ## Setup
 
@@ -10,12 +14,15 @@ python -m venv .venv
 .venv/Scripts/python -m pip install -e ".[dev]"     # Windows; use .venv/bin/python on macOS/Linux
 ```
 
-Create an API key at https://snapgen.ai/profile/integration/api-keys, then:
+Create an API key at https://snapgen.ai/profile/integration/api-keys. Make a dedicated key for MCP so you can
+revoke it on its own.
 
-| Env var | Default |
-|---|---|
-| `SNAPGEN_API_KEY` | required |
-| `SNAPGEN_BASE_URL` | `https://api.snapgen.ai` |
+| Env var | Default | Used by |
+|---|---|---|
+| `SNAPGEN_API_KEY` | required for stdio | stdio only; **ignored in HTTP mode** |
+| `SNAPGEN_BASE_URL` | `https://api.snapgen.ai` | both |
+| `SNAPGEN_MCP_TRANSPORT` | `stdio` (or `--transport http`) | both |
+| `SNAPGEN_MCP_HOST`, `SNAPGEN_MCP_PORT` | `127.0.0.1`, `8000` (or `--host`, `--port`) | HTTP |
 
 ## Tools
 
@@ -45,15 +52,60 @@ Model-specific settings go in `options`, e.g. `generate_video(model="seedance-2-
 The registry was built from docs.snapgen.ai (geminigen-docs, `main`). Where the docs were ambiguous the
 validation is permissive and the backend is the source of truth.
 
-## Use with Claude Code
+## Run over HTTP (hosted)
+
+```bash
+.venv/Scripts/python -m snapgen_mcp.server --transport http --host 0.0.0.0 --port 8000
+```
+
+- MCP endpoint: `POST /mcp`. Health check: `GET /health`.
+- Stateless: each request is self-contained, so it works behind any load balancer.
+- The key comes **only** from the request: `x-api-key: <key>` (preferred) or `Authorization: Bearer <key>`.
+  The server never falls back to `SNAPGEN_API_KEY` for an HTTP caller, never stores keys and never logs them.
+  A request without a key can list tools, but any tool call fails with a clear error before reaching the API.
+- Terminate TLS at your proxy. Keys travel in headers, so never expose this endpoint over plain HTTP.
+
+### Client configs (HTTP)
+
+Claude Code:
+
+```bash
+claude mcp add --transport http snapgen https://YOUR-MCP-HOST/mcp --header "x-api-key: $SNAPGEN_API_KEY"
+```
+
+or in `.mcp.json` (the key stays in your environment, not in the file):
+
+```json
+{
+  "mcpServers": {
+    "snapgen": {
+      "type": "http",
+      "url": "https://YOUR-MCP-HOST/mcp",
+      "headers": { "x-api-key": "${SNAPGEN_API_KEY}" }
+    }
+  }
+}
+```
+
+Codex (`~/.codex/config.toml`), per the Codex MCP docs:
+
+```toml
+[mcp_servers.snapgen]
+url = "https://YOUR-MCP-HOST/mcp"
+bearer_token_env_var = "SNAPGEN_API_KEY"
+```
+
+These client configs follow each client's documentation but have not yet been tried against a deployed server.
+
+## Run locally over stdio
+
+Claude Code:
 
 ```bash
 claude mcp add snapgen -e SNAPGEN_API_KEY=your-key -- /abs/path/to/.venv/Scripts/python.exe -m snapgen_mcp.server
 ```
 
-## Use with Claude Desktop
-
-Add to `claude_desktop_config.json`:
+Claude Desktop (`claude_desktop_config.json`):
 
 ```json
 {
@@ -71,5 +123,5 @@ Add to `claude_desktop_config.json`:
 
 ```bash
 npx @modelcontextprotocol/inspector .venv/Scripts/python.exe -m snapgen_mcp.server
-.venv/Scripts/python -m pytest
+.venv/Scripts/python -m pytest        # unit tests plus an end-to-end HTTP test with a fake API
 ```

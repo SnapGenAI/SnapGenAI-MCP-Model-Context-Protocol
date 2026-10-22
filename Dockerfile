@@ -20,7 +20,7 @@ COPY src ./src
 RUN pip install . && rm -rf /app/src /app/pyproject.toml /app/build
 
 # Run as an unprivileged user.
-RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin snapgen
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin snapgen
 USER snapgen
 
 EXPOSE 8000

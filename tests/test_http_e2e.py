@@ -186,3 +186,12 @@ async def test_server_logs_never_contain_api_keys(stack):
     log = stack["log"].read_text(errors="replace")
     for secret in ("key-a", "key-b", "key-img", "key-v", OWNER_KEY, "Bearer"):
         assert secret not in log, f"{secret!r} leaked into server log"
+
+
+def test_container_healthcheck_exit_codes(stack, monkeypatch):
+    from snapgen_mcp import healthcheck
+
+    monkeypatch.setenv("SNAPGEN_MCP_PORT", stack["url"].rsplit(":", 1)[1])
+    assert healthcheck.main() == 0
+    monkeypatch.setenv("SNAPGEN_MCP_PORT", str(free_port()))  # nothing listens here
+    assert healthcheck.main() == 1

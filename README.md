@@ -65,6 +65,27 @@ validation is permissive and the backend is the source of truth.
   A request without a key can list tools, but any tool call fails with a clear error before reaching the API.
 - Terminate TLS at your proxy. Keys travel in headers, so never expose this endpoint over plain HTTP.
 
+### Deploy with Docker
+
+```bash
+docker build -t snapgen-mcp .
+docker run --rm -p 8000:8000 snapgen-mcp
+```
+
+The image holds no secrets and needs no configuration. It runs as an unprivileged user, listens on `0.0.0.0:8000`,
+and reports health through `GET /health` (the container `HEALTHCHECK` uses it). `SNAPGEN_BASE_URL` can point it at a
+different API environment (for example staging); `SNAPGEN_MCP_PORT` changes the port.
+
+What the platform in front of it must do:
+
+- **Terminate TLS.** Keys travel in request headers, so never publish the endpoint over plain HTTP.
+- **Not log request headers or bodies** at the proxy or load balancer (`x-api-key`, `Authorization`). The server itself
+  logs neither.
+- **Rate limit per client IP** at the proxy. Per-user limits and credit checks already happen in the SnapGen API.
+- **Health check** `GET /health` and send traffic to `POST /mcp`. Run as many replicas as you like: the server is
+  stateless, so no sticky sessions are needed.
+- **Handle shutdown signals:** the process is PID 1 and exits cleanly on `SIGTERM`.
+
 ### Client configs (HTTP)
 
 Claude Code:

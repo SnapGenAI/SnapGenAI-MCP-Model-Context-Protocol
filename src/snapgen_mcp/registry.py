@@ -326,6 +326,55 @@ for _m, (_s, _modes, _dur, _needs_video) in _KLING.items():
                + (" REQUIRES at least one reference image (image-to-video only)." if _m in _KLING_NEEDS_IMAGE else "")),
     ))
 
+# Kling 4.0 family (docs.snapgen.ai, main, 2026-10-21). For these models `mode` IS the output resolution.
+_K4_ASPECT = P("str", choices=("16:9", "9:16", "1:1"), default="16:9")
+_K4_MODE_IMAGE = P("str", "frame = first image is the start frame, second is the end frame; ingredient = "
+                          "reference images you can cite in the prompt as @image1, @image2.",
+                   choices=("frame", "ingredient"), default="frame")
+_K4_REF_VIDEO_CHARGE = ("Reference videos are charged extra: total reference seconds (each video rounded up) x "
+                        "per-second price x 60%, rounded up. The full amount comes back as estimated_credit.")
+_add(ModelSpec(
+    id="kling-video-4-0", family="kling", kind="video", endpoint="/video-gen/kling", send_model="kling-video-4-0",
+    summary="Kling 4.0: newest, cinematic motion at 720p or 1080p, 3-30s, start/end frames, reference images and videos.",
+    params={
+        "mode": P("str", "Output resolution.", choices=("720p", "1080p"), default="720p"),
+        "duration": P("int", min=3, max=30),
+        "aspect_ratio": _K4_ASPECT,
+        "mode_image": _K4_MODE_IMAGE,
+    },
+    image_urls=Refs("ref_images", 10), video_urls=Refs("ref_videos", 2), min_prompt_len=10,
+    pricing="Docs: 15 credits/s at 720p, 22 credits/s at 1080p (checked live: 3s at 720p cost 45). "
+            + _K4_REF_VIDEO_CHARGE,
+    notes="Prompt at least 10 characters. Up to 10 images; up to 2 reference videos of at most 30s each. "
+          "With reference videos attached, images are always used as references, never as start/end frames.",
+))
+_add(ModelSpec(
+    id="kling-video-4-0-flash", family="kling", kind="video", endpoint="/video-gen/kling",
+    send_model="kling-video-4-0-flash",
+    summary="Kling 4.0 Flash: faster, cheaper Kling 4.0 at 720p, 3-20s, start frame, reference images and videos.",
+    params={
+        "mode": P("str", "Output resolution (720p only).", choices=("720p",), default="720p"),
+        "duration": P("int", min=3, max=20),
+        "aspect_ratio": _K4_ASPECT,
+        "mode_image": _K4_MODE_IMAGE,
+    },
+    image_urls=Refs("ref_images", 10), video_urls=Refs("ref_videos", 2), min_prompt_len=10,
+    pricing="Docs: 11 credits/s (checked live: 3s cost 33). " + _K4_REF_VIDEO_CHARGE,
+    notes="Prompt at least 10 characters. Start frame only (no end frame). Up to 10 images; up to 2 reference "
+          "videos of at most 20s each. With reference videos attached, images are always used as references.",
+))
+_add(ModelSpec(
+    id="kling-video-motion-4", family="kling", kind="video", endpoint="/video-gen/kling",
+    send_model="kling-video-motion-4",
+    summary="Kling 4.0 Motion Control: copies the movement of a reference video onto the character in an image.",
+    params={"mode": P("str", "Output resolution.", choices=("720p", "1080p"), default="720p")},
+    image_urls=Refs("ref_images", 1, min=1), video_urls=Refs("ref_videos", 1, min=1), min_prompt_len=10,
+    pricing="Docs: 18 credits/s at 720p, 25 credits/s at 1080p, per second of the motion video, no extra "
+            "reference video charge (checked live: a 10s motion video at 720p cost 180).",
+    notes="Requires exactly one character image (reference_image_urls) and one motion video up to 30s "
+          "(reference_video_urls). Duration and aspect ratio come from the motion video and cannot be set.",
+))
+
 # ---------------------------------------------------------------- video: others
 _add(ModelSpec(
     id="minimax-h3", family="minimax", kind="video", endpoint="/video-gen/minimax", send_model="minimax-h3",

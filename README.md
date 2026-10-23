@@ -42,7 +42,7 @@ Generation is async: start a job, then poll `get_generation`.
 
 ## Models
 
-32 image and video models in 10 families, plus 4 extend models and a storyboard, all driven by
+35 image and video models in 10 families, plus 4 extend models and a storyboard, all driven by
 `src/snapgen_mcp/registry.py`: nano-banana, gpt-image, grok, vela, veo (incl. omni-flash), seedance,
 kling, minimax, flux, muse. Each model's options are validated locally before any credits are spent.
 Model-specific settings go in `options`, e.g. `generate_video(model="seedance-2-omni", options={"duration": 8})`.

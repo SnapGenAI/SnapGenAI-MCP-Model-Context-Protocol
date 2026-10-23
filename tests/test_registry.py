@@ -28,7 +28,7 @@ def test_every_spec_is_internally_consistent():
 
 def test_model_counts_and_families():
     models = registry.all_models()
-    assert len([m for m in models if m.kind in ("image", "video")]) == 32
+    assert len([m for m in models if m.kind in ("image", "video")]) == 35
     assert {m.family for m in models} == {"nano-banana", "grok", "gpt-image", "vela", "veo", "seedance",
                                           "kling", "minimax", "flux", "muse"}
 
@@ -169,3 +169,44 @@ def test_kling_image_required_models_and_removed_16():
 def test_every_priced_model_exists_and_has_observed_pricing():
     assert registry.get_model("veo-3.1").pricing.startswith("Observed estimate")
     assert "332" in registry.get_model("seedance-2-5-omni").pricing
+
+
+def test_kling4_models_resolution_is_the_mode():
+    ep, f = build("kling-video-4-0", options={"mode": "1080p", "duration": 30, "mode_image": "ingredient"},
+                  image_urls=["https://x/a.png"], video_urls=["https://x/v1.mp4", "https://x/v2.mp4"])
+    assert ep == "/video-gen/kling" and f["model"] == "kling-video-4-0" and f["mode"] == "1080p"
+    assert f["duration"] == 30 and f["mode_image"] == "ingredient" and len(f["ref_videos"]) == 2
+    with pytest.raises(SnapGenError, match="duration"):
+        build("kling-video-4-0", options={"duration": 31})
+    with pytest.raises(SnapGenError, match="at most 2 reference videos"):
+        build("kling-video-4-0", video_urls=["a", "b", "c"])
+    with pytest.raises(SnapGenError, match="at most 10 reference images"):
+        build("kling-video-4-0", image_urls=["i"] * 11)
+    with pytest.raises(SnapGenError, match="mode"):
+        build("kling-video-4-0", options={"mode": "standard"})  # the old mode names do not apply to 4.0
+
+
+def test_kling4_flash_is_720p_and_20s_max():
+    assert build("kling-video-4-0-flash", options={"duration": 20})[1]["duration"] == 20
+    with pytest.raises(SnapGenError, match="mode"):
+        build("kling-video-4-0-flash", options={"mode": "1080p"})
+    with pytest.raises(SnapGenError, match="duration"):
+        build("kling-video-4-0-flash", options={"duration": 21})
+
+
+def test_kling4_motion_needs_one_image_and_one_video_and_ignores_duration():
+    spec = registry.get_model("kling-video-motion-4")
+    assert "duration" not in spec.params and "aspect_ratio" not in spec.params
+    with pytest.raises(SnapGenError, match="at least 1 reference videos"):
+        build("kling-video-motion-4", image_urls=["i"])
+    with pytest.raises(SnapGenError, match="at least 1 reference images"):
+        build("kling-video-motion-4", video_urls=["v"])
+    with pytest.raises(SnapGenError, match="at most 1 reference videos"):
+        build("kling-video-motion-4", image_urls=["i"], video_urls=["v1", "v2"])
+    _, f = build("kling-video-motion-4", options={"mode": "1080p"}, image_urls=["i"], video_urls=["v"])
+    assert f["mode"] == "1080p" and f["ref_images"] == ["i"] and f["ref_videos"] == ["v"]
+
+
+def test_kling4_prompt_must_be_at_least_ten_characters():
+    with pytest.raises(SnapGenError, match="at least 10"):
+        build("kling-video-4-0", prompt="too short")

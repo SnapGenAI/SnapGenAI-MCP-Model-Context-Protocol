@@ -84,6 +84,8 @@ What the platform in front of it must do:
 - **Rate limit per client IP** at the proxy. Per-user limits and credit checks already happen in the SnapGen API.
 - **Health check** `GET /health` and send traffic to `POST /mcp`. Run as many replicas as you like: the server is
   stateless, so no sticky sessions are needed.
+- **Allow long-lived `GET /mcp` requests.** Claude Code and Codex open this stream and keep it idle. Set a proxy idle
+  timeout of several minutes, or accept that clients reconnect.
 - **Handle shutdown signals:** the process is PID 1 and exits cleanly on `SIGTERM`.
 
 ### Client configs (HTTP)
@@ -116,7 +118,15 @@ url = "https://YOUR-MCP-HOST/mcp"
 bearer_token_env_var = "SNAPGEN_API_KEY"
 ```
 
-These client configs follow each client's documentation but have not yet been tried against a deployed server.
+### Tested clients
+
+| Client | Status | Notes |
+|---|---|---|
+| Claude Code 2.1.227 (Windows) | Verified 2026-10-23 against a local container over plain HTTP | `${SNAPGEN_API_KEY}` expansion inside `headers` works, and so does a literal header. One plain-English request ("make an image of ...") submitted, polled and returned the image URL in about a minute. A wrong key and a missing key both give a readable error. No OAuth probing and no keys in the server log. |
+| Codex desktop | Added and connected through its Streamable HTTP form | Checked by hand; details were not recorded. |
+| Cursor, VS Code | Not tested yet | |
+
+Not yet tested: a deployed server behind TLS and a proxy.
 
 ## Run locally over stdio
 

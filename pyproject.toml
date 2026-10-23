@@ -1,8 +1,31 @@
 [project]
 name = "snapgen-mcp"
 version = "0.1.0"
-description = "MCP server for snapgen.ai image and video generation"
+description = "MCP server for snapgen.ai image and video generation (Veo, Kling, Seedance, Grok and more) for Claude Code, Codex and Cursor"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+keywords = [
+    "mcp", "mcp-server", "model-context-protocol", "ai", "ai-video-generator", "video-generation",
+    "image-generation", "text-to-video", "image-to-video", "veo", "kling", "seedance",
+    "claude-code", "codex", "cursor", "ai-agents", "llm-tools", "snapgen",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "mcp>=1.2,<2",
     "httpx>=0.27",
@@ -11,11 +34,17 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "respx"]
 
+[project.urls]
+Homepage = "https://snapgen.ai"
+Documentation = "https://docs.snapgen.ai"
+Repository = "https://github.com/SnapGenAI/SnapGenAI-MCP-Model-Context-Protocol"
+Issues = "https://github.com/SnapGenAI/SnapGenAI-MCP-Model-Context-Protocol/issues"
+
 [project.scripts]
 snapgen-mcp = "snapgen_mcp.server:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]  # 77+ for the SPDX license expression above
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

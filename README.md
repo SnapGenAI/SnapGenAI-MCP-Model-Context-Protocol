@@ -184,17 +184,20 @@ SnapGen API. It prints PASS, FAIL or SKIP per check and exits 1 if anything fail
 pip refuses to install anything that does not match. They are generated on Linux with Python 3.12, so they omit
 Windows-only packages: for local development use `pip install -e ".[dev]"` instead.
 
-To add a dependency, edit `pyproject.toml` and regenerate. Add `--upgrade` to move to newer versions:
+To add a dependency, edit `pyproject.toml` and regenerate. Add `--upgrade` to move to newer versions. `pip` and `pip-tools`
+are pinned to the versions that made the current locks, and the CI lock check pins the same ones:
 
 ```bash
-docker run --rm -v "$PWD":/work -w /work python:3.12-slim sh -c "pip install -q pip-tools &&   pip-compile --generate-hashes --strip-extras -o requirements.lock pyproject.toml &&   pip-compile --generate-hashes --strip-extras --extra dev -o requirements-dev.lock pyproject.toml"
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim sh -c "pip install -q pip==25.0.1 pip-tools==7.6.2 && \
+  pip-compile --generate-hashes --strip-extras -o requirements.lock pyproject.toml && \
+  pip-compile --generate-hashes --strip-extras --extra dev -o requirements-dev.lock pyproject.toml"
 ```
 
 (In Git Bash on Windows, use `"$(pwd -W):/work"` and prefix the command with `MSYS_NO_PATHCONV=1`.)
 
 ### CI
 
-`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`:
+`.github/workflows/ci.yml` runs on every push, on pull requests, and on demand from the Actions tab:
 
 - **Tests** on Python 3.10 and 3.13 (latest releases, unpinned) and on 3.12 installed from the lock.
 - **Lock files** are re-resolved and must come out unchanged, so `pyproject.toml` and the locks cannot drift apart.

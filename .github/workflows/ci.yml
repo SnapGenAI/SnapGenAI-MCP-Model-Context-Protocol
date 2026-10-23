@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]   # every branch, so work is tested before any pull request exists
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,7 +54,8 @@ jobs:
           python-version: "3.12"
       - name: Re-resolve with the existing pins and fail on any difference
         run: |
-          pip install pip-tools
+          # Same pip and pip-tools as the ones that generated the locks, so formatting cannot differ by version.
+          pip install pip==25.0.1 pip-tools==7.6.2
           pip-compile --quiet --generate-hashes --strip-extras -o requirements.lock pyproject.toml
           pip-compile --quiet --generate-hashes --strip-extras --extra dev -o requirements-dev.lock pyproject.toml
           git diff --exit-code -- requirements.lock requirements-dev.lock

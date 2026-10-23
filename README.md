@@ -128,9 +128,8 @@ bearer_token_env_var = "SNAPGEN_API_KEY"
 | Client | Status | Notes |
 |---|---|---|
 | Claude Code 2.1.227 (Windows) | Verified 2026-10-23 against a local container over plain HTTP | `${SNAPGEN_API_KEY}` expansion inside `headers` works, and so does a literal header. One plain-English request ("make an image of ...") submitted, polled and returned the image URL in about a minute. A wrong key and a missing key both give a readable error. No OAuth probing and no keys in the server log. Rechecked after `GET /mcp` started answering `405`: Claude Code takes the 405 and carries on, and the full image flow still works. |
-| Codex desktop | Worked | Added through its Streamable HTTP form and connected successfully. Tested by hand by the maintainers; version and date not recorded. |
-| Cursor | Worked | Tested by hand by the maintainers; version and date not recorded. |
-| VS Code | Not tested yet | |
+| Codex desktop | Worked | Added through its Streamable HTTP form and connected successfully. Tested by hand by the maintainers. |
+| Cursor | Worked | Tested by hand by the maintainers. |
 
 Claude Code was checked step by step (connect, balance, a full image request, error messages). Codex and Cursor were
 tested by hand against the same server.

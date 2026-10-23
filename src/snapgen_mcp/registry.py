@@ -292,10 +292,11 @@ _add(ModelSpec(
 _KLING = {  # id: (summary, modes, duration param or None, needs ref video, description)
     "kling-video-3-0": ("Kling 3.0: best text/image-to-video, up to 15s.", ("standard", "professional"),
                         P("int", min=3, max=15), False),
+    # 2.5 and 2.6 accept only 5 or 10 seconds (the backend rejects 3 and 4, verified live 2026-10-24); 3.0 takes 3-15.
     "kling-video-2-6": ("Kling 2.6: stable, supports voiceover via professional_audio.",
-                        ("standard", "professional", "professional_audio"), P("int", min=3, max=15), False),
+                        ("standard", "professional", "professional_audio"), P("int", choices=(5, 10)), False),
     "kling-video-2-5": ("Kling 2.5: 'relax' mode is cheapest.", ("relax", "standard", "professional"),
-                        P("int", min=3, max=15), False),
+                        P("int", choices=(5, 10)), False),
     "kling-video-2-1-5s": ("Kling 2.1, fixed 5s.", ("standard", "professional"), P("int", choices=(5,)), False),
     "kling-video-2-1-10s": ("Kling 2.1, fixed 10s.", ("standard", "professional"), P("int", choices=(10,)), False),
     # kling-video-1-6-5s / -10s are in the docs but the backend has no service price for them in
@@ -435,9 +436,9 @@ _OBSERVED = {
     "grok-extend": "~15 credits", "grok-storyboard": "~15 credits per 6s scene (480p)",
     "seedance-2-omni": "~108 credits (4s)", "seedance-2-mini": "~84 credits (4s)",
     "seedance-2-5-omni": "~332 credits (4s)", "sd-2-lower": "~6 credits (5s)",
-    "minimax-h3": "~150 credits (5s)", "flux-3": "~170 credits (5s)",
+    "minimax-h3": "~30 credits/s (5s cost 150, 6s cost 180)", "flux-3": "~34 credits/s (5s cost 170, 6s cost 204)",
     "vela-ai-video": "~1 credit", "muse-ai-video": "~0 credits observed (may be promotional)",
-    "kling-video-3-0": "~55 credits (5s, standard)", "kling-video-2-6": "~30 credits (5s, standard)",
+    "kling-video-3-0": "~11 credits/s (3s cost 33, 5s cost 55, standard)", "kling-video-2-6": "~30 credits (5s, standard)",
     "kling-video-2-5": "~15 credits (5s, relax)", "kling-video-2-1-5s": "~35 credits (standard)",
     "kling-video-2-1-10s": "~30 credits (standard)",
     "kling-video-motion-3": "~100 credits (scales with the reference video length)",

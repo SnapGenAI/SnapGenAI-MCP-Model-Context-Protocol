@@ -181,6 +181,7 @@ async def extend_video(
     """Continue an existing video from its last frame. COSTS CREDITS: tell the user before calling.
 
     `video_uuid` is the uuid of a completed video made with the matching family (veo, grok, seedance).
+    Storyboards cannot be extended.
     Describe what happens next in `prompt`. Returns a job uuid; poll get_generation.
     """
     spec = registry.get_model(model, "extend")

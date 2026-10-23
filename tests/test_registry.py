@@ -210,3 +210,19 @@ def test_kling4_motion_needs_one_image_and_one_video_and_ignores_duration():
 def test_kling4_prompt_must_be_at_least_ten_characters():
     with pytest.raises(SnapGenError, match="at least 10"):
         build("kling-video-4-0", prompt="too short")
+
+
+def test_kling_25_and_26_accept_only_5_or_10_seconds_but_30_takes_3_to_15():
+    for model in ("kling-video-2-5", "kling-video-2-6"):
+        for ok in (5, 10):
+            assert build(model, options={"duration": ok}, image_urls=["i"])[1]["duration"] == ok
+        for bad in (3, 4, 7, 15):
+            with pytest.raises(SnapGenError, match="duration"):
+                build(model, options={"duration": bad}, image_urls=["i"])
+    assert build("kling-video-3-0", options={"duration": 3})[1]["duration"] == 3
+    assert build("kling-video-3-0", options={"duration": 15})[1]["duration"] == 15
+
+
+def test_flux_and_minimax_pricing_notes_state_the_per_second_rate():
+    assert "34 credits/s" in registry.get_model("flux-3").pricing
+    assert "30 credits/s" in registry.get_model("minimax-h3").pricing

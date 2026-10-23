@@ -15,9 +15,15 @@ ENV PYTHONUNBUFFERED=1 \
     SNAPGEN_MCP_PORT=8000
 
 WORKDIR /app
+
+# Dependencies first, exactly as pinned in requirements.lock and checked against its hashes. This layer is cached
+# until the lock changes. Regenerate the lock as described in the README.
+COPY requirements.lock ./
+RUN pip install --require-hashes --no-deps -r requirements.lock
+
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install . && rm -rf /app/src /app/pyproject.toml /app/build
+RUN pip install --no-deps . && rm -rf /app/src /app/pyproject.toml /app/requirements.lock /app/build
 
 # Run as an unprivileged user.
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin snapgen

@@ -14,3 +14,6 @@ tests
 Dockerfile
 .dockerignore
 README.md
+requirements-dev.lock
+scripts
+.github

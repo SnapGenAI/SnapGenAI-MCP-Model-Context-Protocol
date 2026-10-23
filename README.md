@@ -155,9 +155,48 @@ Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
-## Inspect and test
+## Develop and test
 
 ```bash
-npx @modelcontextprotocol/inspector .venv/Scripts/python.exe -m snapgen_mcp.server
-.venv/Scripts/python -m pytest        # unit tests plus an end-to-end HTTP test with a fake API
+npx @modelcontextprotocol/inspector .venv/Scripts/python.exe -m snapgen_mcp.server   # poke at the tools by hand
+.venv/Scripts/python -m pytest        # unit tests plus end-to-end HTTP tests against a fake API
 ```
+
+### Smoke test a running server
+
+Run it against any server (local, container, staging or production) after a deploy:
+
+```bash
+python scripts/smoke_test.py --url https://YOUR-MCP-HOST --api-key "$SNAPGEN_API_KEY"
+```
+
+It checks health, the `GET`/`DELETE` 405 rule, the tool list, the catalog tools, missing and invalid keys, that bad
+requests are refused before any credit is spent, and (with a key) a valid key via both headers and a free call to the
+SnapGen API. It prints PASS, FAIL or SKIP per check and exits 1 if anything fails.
+
+- It never spends credits unless you pass `--generate` (one small image, about 3 credits).
+- Without a key, the checks that need one are skipped, not failed. `--url` defaults to `$SNAPGEN_MCP_URL`.
+- The key is read from `--api-key` or `$SNAPGEN_API_KEY` and is never printed.
+
+### Dependency lock files
+
+`requirements.lock` (what the Docker image installs) and `requirements-dev.lock` (CI) pin every package with hashes, and
+pip refuses to install anything that does not match. They are generated on Linux with Python 3.12, so they omit
+Windows-only packages: for local development use `pip install -e ".[dev]"` instead.
+
+To add a dependency, edit `pyproject.toml` and regenerate. Add `--upgrade` to move to newer versions:
+
+```bash
+docker run --rm -v "$PWD":/work -w /work python:3.12-slim sh -c "pip install -q pip-tools &&   pip-compile --generate-hashes --strip-extras -o requirements.lock pyproject.toml &&   pip-compile --generate-hashes --strip-extras --extra dev -o requirements-dev.lock pyproject.toml"
+```
+
+(In Git Bash on Windows, use `"$(pwd -W):/work"` and prefix the command with `MSYS_NO_PATHCONV=1`.)
+
+### CI
+
+`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`:
+
+- **Tests** on Python 3.10 and 3.13 (latest releases, unpinned) and on 3.12 installed from the lock.
+- **Lock files** are re-resolved and must come out unchanged, so `pyproject.toml` and the locks cannot drift apart.
+- **Docker image** is built, must run as an unprivileged user, must become healthy, and must pass the smoke test (without
+  an API key, so only the credit-free checks run).

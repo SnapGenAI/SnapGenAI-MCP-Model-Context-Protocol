@@ -39,12 +39,34 @@ class FakeUapi:
         self.app = Starlette(routes=[
             Route("/uapi/v1/account", self.account),
             Route("/uapi/v1/generate_image", self.generate_image, methods=["POST"]),
+            Route("/uapi/v1/histories", self.histories),
+            Route("/uapi/v1/history/{uuid}", self.history),
         ])
+
+    @staticmethod
+    def rejected(key):
+        return key in (None, "bad") or key.startswith(("geminiai-smoke-test", "wrong-"))
+
+    async def histories(self, request):
+        key = request.headers.get("x-api-key")
+        self.seen.append({"path": "histories", "key": key})
+        if self.rejected(key):
+            return JSONResponse({"detail": {"error_code": "API_KEY_NOT_FOUND"}}, status_code=404)
+        return JSONResponse({"success": True, "total": 0, "result": []})
+
+    async def history(self, request):
+        key = request.headers.get("x-api-key")
+        self.seen.append({"path": "history", "key": key})
+        if self.rejected(key):
+            return JSONResponse({"detail": {"error_code": "API_KEY_NOT_FOUND"}}, status_code=404)
+        return JSONResponse({"uuid": request.path_params["uuid"], "type": "image", "status": 2,
+                             "status_desc": "COMPLETED", "used_credit": 3,
+                             "generated_image": [{"image_url": "https://example.test/i.png"}]})
 
     async def account(self, request):
         key = request.headers.get("x-api-key")
         self.seen.append({"path": "account", "key": key})
-        if key == "bad":
+        if self.rejected(key):
             return JSONResponse({"detail": {"error_code": "API_KEY_NOT_FOUND"}}, status_code=404)
         return JSONResponse({"full_name": f"user-of-{key}", "plan_id": "P1",
                              "user_credit": {"available_credit": 100, "locked_credit": 0}})
@@ -276,3 +298,61 @@ def test_allow_list_accepts_only_the_listed_host():
         assert initialize_status(url, host="mcp.example.com:443") == 200
         assert initialize_status(url, host="evil.example.org") == 421
         assert httpx.get(f"{url}/health", headers={"Host": "evil.example.org"}).status_code == 200  # health stays open
+
+
+# ------------------------------------------------------------------ the smoke-test script itself
+from pathlib import Path  # noqa: E402
+
+SMOKE = Path(__file__).resolve().parents[1] / "scripts" / "smoke_test.py"
+
+
+def run_smoke(url, *extra, key=None):
+    env = {k: v for k, v in os.environ.items() if k not in ("SNAPGEN_API_KEY", "SNAPGEN_MCP_URL")}
+    cmd = [sys.executable, str(SMOKE), "--url", url, "--timeout", "10", *extra]
+    if key:
+        cmd += ["--api-key", key]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=150)
+
+
+def test_smoke_script_without_a_key_runs_the_keyless_checks_and_skips_the_rest(stack):
+    r = run_smoke(stack["url"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "6 passed, 0 failed, 5 skipped" in r.stdout
+    assert r.stdout.count("SKIP") == 5 and "no API key given" in r.stdout
+
+
+def test_smoke_script_with_a_key_passes_and_spends_nothing_by_default(stack):
+    before = len(stack["uapi"].seen)
+    r = run_smoke(stack["url"], key="key-smoke")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "10 passed, 0 failed, 1 skipped" in r.stdout
+    assert "plan P1" in r.stdout
+    assert "key-smoke" not in r.stdout + r.stderr  # the key is never printed
+    assert all(s["path"] != "generate_image" for s in stack["uapi"].seen[before:])
+
+
+def test_smoke_script_generate_flag_makes_exactly_one_image(stack):
+    before = len(stack["uapi"].seen)
+    r = run_smoke(stack["url"], "--generate", "--generate-wait", "30", key="key-smoke")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "11 passed, 0 failed, 0 skipped" in r.stdout
+    assert [s["path"] for s in stack["uapi"].seen[before:]].count("generate_image") == 1
+
+
+def test_smoke_script_fails_when_the_key_is_rejected(stack):
+    r = run_smoke(stack["url"], key="wrong-key-for-test")
+    assert r.returncode == 1
+    assert r.stdout.count("FAIL") == 3 and "3 failed" in r.stdout
+    assert "wrong-key-for-test" not in r.stdout + r.stderr
+
+
+def test_smoke_script_fails_clearly_when_nothing_is_listening():
+    r = run_smoke(f"http://127.0.0.1:{free_port()}")
+    assert r.returncode == 1
+    assert "FAIL  health" in r.stdout and "ConnectError" in r.stdout
+    assert "ExceptionGroup" not in r.stdout  # the real cause is shown, not the wrapper
+
+
+def test_smoke_script_warns_about_plain_http_to_a_non_local_host():
+    r = run_smoke("http://203.0.113.1:9", "--timeout", "2")  # TEST-NET-3: never routable
+    assert "WARN  transport" in r.stdout and r.returncode == 1

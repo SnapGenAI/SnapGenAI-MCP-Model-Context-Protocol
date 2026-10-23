@@ -195,3 +195,84 @@ def test_container_healthcheck_exit_codes(stack, monkeypatch):
     assert healthcheck.main() == 0
     monkeypatch.setenv("SNAPGEN_MCP_PORT", str(free_port()))  # nothing listens here
     assert healthcheck.main() == 1
+
+
+# ------------------------------------------------------------------ endpoint method and Host handling
+INIT = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}
+MCP_HEADERS = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+
+
+def initialize_status(url, host=None):
+    headers = dict(MCP_HEADERS, **({"Host": host} if host else {}))
+    return httpx.post(f"{url}/mcp", json=INIT, headers=headers, timeout=10).status_code
+
+
+import contextlib  # noqa: E402
+
+
+@contextlib.contextmanager
+def spawn(extra_args=(), extra_env=None):
+    """A short-lived server on its own port, for tests that need a different binding or environment."""
+    port = free_port()
+    env = {k: v for k, v in os.environ.items() if k != "SNAPGEN_MCP_ALLOWED_HOSTS"}
+    env.update({"PYTHONUNBUFFERED": "1", **(extra_env or {})})
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "snapgen_mcp.server", "--transport", "http", "--port", str(port), *extra_args],
+        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.time() + 20
+        while True:
+            try:
+                if httpx.get(f"{url}/health", timeout=1).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            if proc.poll() is not None or time.time() > deadline:
+                raise RuntimeError("test server did not start")
+            time.sleep(0.2)
+        yield url
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+@pytest.mark.parametrize("path", ["/mcp", "/mcp/"])
+def test_get_and_delete_on_the_mcp_endpoint_are_405_with_allow_post(stack, method, path):
+    r = httpx.request(method, f"{stack['url']}{path}", headers={"Accept": "text/event-stream"}, timeout=5)
+    assert r.status_code == 405
+    assert r.headers["allow"] == "POST"
+
+
+def test_405_needs_no_key_and_cannot_hold_a_connection_open(stack):
+    start = time.time()
+    r = httpx.get(f"{stack['url']}/mcp", headers={"Accept": "text/event-stream"}, timeout=5)
+    assert r.status_code == 405 and time.time() - start < 2  # answered at once, no idle stream
+
+
+def test_post_and_health_are_unaffected_by_the_405_rule(stack):
+    assert initialize_status(stack["url"]) == 200
+    assert httpx.get(f"{stack['url']}/health").status_code == 200
+
+
+def test_loopback_binding_rejects_a_foreign_host_header(stack):
+    assert initialize_status(stack["url"], host="mcp.example.com") == 421
+
+
+def test_hosted_binding_accepts_the_public_host_a_proxy_forwards():
+    with spawn(["--host", "0.0.0.0"]) as url:
+        assert initialize_status(url, host="mcp.example.com") == 200
+        assert initialize_status(url, host="anything.else.test:8443") == 200
+
+
+def test_allow_list_accepts_only_the_listed_host():
+    with spawn(["--host", "0.0.0.0"], {"SNAPGEN_MCP_ALLOWED_HOSTS": "mcp.example.com"}) as url:
+        assert initialize_status(url, host="mcp.example.com") == 200
+        assert initialize_status(url, host="mcp.example.com:443") == 200
+        assert initialize_status(url, host="evil.example.org") == 421
+        assert httpx.get(f"{url}/health", headers={"Host": "evil.example.org"}).status_code == 200  # health stays open

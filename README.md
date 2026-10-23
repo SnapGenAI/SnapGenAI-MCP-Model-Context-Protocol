@@ -23,6 +23,7 @@ revoke it on its own.
 | `SNAPGEN_BASE_URL` | `https://api.snapgen.ai` | both |
 | `SNAPGEN_MCP_TRANSPORT` | `stdio` (or `--transport http`) | both |
 | `SNAPGEN_MCP_HOST`, `SNAPGEN_MCP_PORT` | `127.0.0.1`, `8000` (or `--host`, `--port`) | HTTP |
+| `SNAPGEN_MCP_ALLOWED_HOSTS` | unset | HTTP: comma-separated public hostnames, e.g. `mcp.example.com`. When set, requests whose `Host` header is not listed get `421`. |
 
 ## Tools
 
@@ -59,7 +60,11 @@ validation is permissive and the backend is the source of truth.
 ```
 
 - MCP endpoint: `POST /mcp`. Health check: `GET /health`.
-- Stateless: each request is self-contained, so it works behind any load balancer.
+- Stateless: each request is self-contained, so it works behind any load balancer. `GET` and `DELETE` on `/mcp`
+  answer `405` with `Allow: POST`: there is no server-initiated stream to open and no session to end.
+- Host header: bound to loopback (the default) the server only accepts loopback host names. Bound to anything else
+  (the container uses `0.0.0.0`) it accepts the public hostname a proxy forwards, so it works behind a real domain.
+  Set `SNAPGEN_MCP_ALLOWED_HOSTS` to enforce an allow-list.
 - The key comes **only** from the request: `x-api-key: <key>` (preferred) or `Authorization: Bearer <key>`.
   The server never falls back to `SNAPGEN_API_KEY` for an HTTP caller, never stores keys and never logs them.
   A request without a key can list tools, but any tool call fails with a clear error before reaching the API.
@@ -84,8 +89,8 @@ What the platform in front of it must do:
 - **Rate limit per client IP** at the proxy. Per-user limits and credit checks already happen in the SnapGen API.
 - **Health check** `GET /health` and send traffic to `POST /mcp`. Run as many replicas as you like: the server is
   stateless, so no sticky sessions are needed.
-- **Allow long-lived `GET /mcp` requests.** Claude Code and Codex open this stream and keep it idle. Set a proxy idle
-  timeout of several minutes, or accept that clients reconnect.
+- **Forward the original `Host` header** (most proxies do by default), and set `SNAPGEN_MCP_ALLOWED_HOSTS` to the public
+  hostname if you want the server to enforce it. No special idle timeout is needed: there are no long-lived streams.
 - **Handle shutdown signals:** the process is PID 1 and exits cleanly on `SIGTERM`.
 
 ### Client configs (HTTP)
@@ -122,7 +127,7 @@ bearer_token_env_var = "SNAPGEN_API_KEY"
 
 | Client | Status | Notes |
 |---|---|---|
-| Claude Code 2.1.227 (Windows) | Verified 2026-10-23 against a local container over plain HTTP | `${SNAPGEN_API_KEY}` expansion inside `headers` works, and so does a literal header. One plain-English request ("make an image of ...") submitted, polled and returned the image URL in about a minute. A wrong key and a missing key both give a readable error. No OAuth probing and no keys in the server log. |
+| Claude Code 2.1.227 (Windows) | Verified 2026-10-23 against a local container over plain HTTP | `${SNAPGEN_API_KEY}` expansion inside `headers` works, and so does a literal header. One plain-English request ("make an image of ...") submitted, polled and returned the image URL in about a minute. A wrong key and a missing key both give a readable error. No OAuth probing and no keys in the server log. Rechecked after `GET /mcp` started answering `405`: Claude Code takes the 405 and carries on, and the full image flow still works. |
 | Codex desktop | Added and connected through its Streamable HTTP form | Checked by hand; details were not recorded. |
 | Cursor, VS Code | Not tested yet | |
 

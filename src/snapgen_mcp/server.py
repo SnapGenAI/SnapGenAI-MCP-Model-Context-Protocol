@@ -6,9 +6,13 @@ import json
 import os
 from typing import Any, Literal
 
+import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import registry
 from .auth import MISSING_KEY_MESSAGE, extract_api_key
@@ -234,6 +238,59 @@ async def list_generations(
     }
 
 
+class PostOnlyEndpoint:
+    """Answer GET and DELETE on the MCP endpoint with 405 and `Allow: POST`.
+
+    The server is stateless and never sends server-initiated messages, so there is no stream to open and no
+    session to end. The MCP spec lets a server without a GET stream answer 405. It also stops callers from holding
+    idle connections open on an endpoint that, unlike the tools, needs no key.
+    """
+
+    def __init__(self, app: ASGIApp, path: str = "/mcp") -> None:
+        self.app = app
+        self.paths = {path, path.rstrip("/") + "/"}
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["path"] in self.paths and scope["method"] in ("GET", "DELETE"):
+            response = PlainTextResponse("Method Not Allowed: send JSON-RPC requests to this endpoint with POST.",
+                                         status_code=405, headers={"Allow": "POST"})
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def transport_security_for(host: str, allowed_hosts: list[str] | None = None) -> TransportSecuritySettings:
+    """Host-header (DNS rebinding) protection, chosen from how the server is bound.
+
+    - Bound to loopback (local use): on, accepting loopback names plus any extra allowed hosts.
+    - Bound elsewhere (hosted, behind a proxy that forwards the public Host header): off by default. Callers prove
+      themselves with a header key rather than ambient browser credentials, so rebinding is not the threat there.
+      Set SNAPGEN_MCP_ALLOWED_HOSTS (comma separated, e.g. "mcp.example.com") to enforce an allow-list instead.
+    """
+    extra = [h.strip() for h in (allowed_hosts or []) if h.strip()]
+    loopback = host in _LOOPBACK
+    if not loopback and not extra:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"] if loopback else []
+    origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"] if loopback else []
+    for h in extra:
+        hosts += [h, f"{h}:*"]
+        origins += [f"https://{h}", f"http://{h}", f"https://{h}:*", f"http://{h}:*"]
+    return TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts,
+                                     allowed_origins=origins)
+
+
+def build_http_app(host: str = "127.0.0.1", allowed_hosts: list[str] | None = None) -> Starlette:
+    """The streamable HTTP app with Host checking chosen for this binding and GET/DELETE refused."""
+    mcp.settings.transport_security = transport_security_for(host, allowed_hosts)
+    app = mcp.streamable_http_app()
+    app.add_middleware(PostOnlyEndpoint, path=mcp.settings.streamable_http_path)
+    return app
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="snapgen-mcp", description="SnapGen MCP server")
     parser.add_argument("--transport", choices=["stdio", "http"],
@@ -246,7 +303,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.transport == "http":
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        mcp.run(transport="streamable-http")  # endpoint: /mcp, health check: /health
+        allowed = os.environ.get("SNAPGEN_MCP_ALLOWED_HOSTS", "").split(",")
+        # endpoint: POST /mcp, health check: GET /health
+        uvicorn.run(build_http_app(args.host, allowed), host=args.host, port=args.port,
+                    log_level=mcp.settings.log_level.lower())
     else:
         mcp.run()
 

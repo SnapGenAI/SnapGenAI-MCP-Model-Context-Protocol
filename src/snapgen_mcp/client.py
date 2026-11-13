@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import IO, Any
 
 import httpx
 
@@ -15,6 +16,8 @@ from .auth import CREATE_KEY_URL
 
 DEFAULT_BASE_URL = "https://api.snapgen.ai"
 TOP_UP_URL = "https://snapgen.ai/pricing"
+RECONNECT_MESSAGE = ("Your SnapGen sign-in is no longer valid (its API key was deleted or your plan changed). "
+                     "Reconnect SnapGen in your assistant's connector settings and sign in again.")
 
 
 def _load_dotenv() -> None:
@@ -34,6 +37,20 @@ _load_dotenv()
 
 class SnapGenError(Exception):
     """A user-presentable error from the snapgen.ai API."""
+
+
+class SnapGenAuthError(SnapGenError):
+    """The API key was refused (missing, deleted or wrong)."""
+
+
+def _is_auth_error(resp: httpx.Response) -> bool:
+    if resp.status_code == 401:
+        return True
+    try:
+        detail = resp.json().get("detail")
+    except ValueError:
+        return False
+    return isinstance(detail, dict) and detail.get("error_code") in ("API_KEY_REQUIRED", "API_KEY_NOT_FOUND")
 
 
 def _error_message(resp: httpx.Response) -> str:
@@ -65,12 +82,16 @@ def _error_message(resp: httpx.Response) -> str:
 
 class SnapGenClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
-                 transport: httpx.AsyncBaseTransport | None = None, timeout: float = 60.0):
+                 transport: httpx.AsyncBaseTransport | None = None, timeout: float = 60.0,
+                 on_auth_error: Callable[[], Awaitable[None]] | None = None):
         # None = stdio/dev mode: read the environment. An explicit key (even empty) never touches the environment.
         self.api_key = api_key if api_key is not None else os.environ.get("SNAPGEN_API_KEY", "")
         self.base_url = (base_url or os.environ.get("SNAPGEN_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self._transport = transport
         self._timeout = timeout
+        # Called when uapi refuses the key, e.g. so an OAuth token whose key was deleted gets revoked and the
+        # client is sent back through sign-in instead of failing forever.
+        self._on_auth_error = on_auth_error
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         if not self.api_key:
@@ -89,6 +110,11 @@ class SnapGenClient:
             except httpx.HTTPError as exc:
                 raise SnapGenError(f"Could not reach snapgen.ai: {exc}") from exc
         if resp.status_code >= 400:
+            if _is_auth_error(resp):
+                if self._on_auth_error is not None:
+                    await self._on_auth_error()
+                    raise SnapGenAuthError(RECONNECT_MESSAGE)
+                raise SnapGenAuthError(_error_message(resp))
             raise SnapGenError(_error_message(resp))
         return resp.json()
 
@@ -107,6 +133,10 @@ class SnapGenClient:
             "GET", "/histories",
             params={"filter_by": filter_by, "page": page, "items_per_page": items_per_page},
         )
+
+    async def upload(self, filename: str, content: IO[bytes], content_type: str) -> dict:
+        """Upload one reference file; uapi stores it and returns a URL the generation endpoints accept."""
+        return await self._request("POST", "/uploads", files={"file": (filename, content, content_type)})
 
 
 def _clean(fields: dict[str, Any]) -> dict[str, Any]:

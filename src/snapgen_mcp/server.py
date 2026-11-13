@@ -14,7 +14,13 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import registry
+from collections.abc import Callable, Sequence
+from typing import Protocol
+
+from starlette.middleware import Middleware
+from starlette.routing import BaseRoute
+
+from . import registry, ui
 from .auth import MISSING_KEY_MESSAGE, extract_api_key
 from .client import SnapGenClient, SnapGenError
 
@@ -23,6 +29,9 @@ from .client import SnapGenClient, SnapGenError
 mcp = FastMCP("snapgen", stateless_http=True, json_response=True)
 
 _client: SnapGenClient | None = None  # stdio / dev only
+
+# Hosts the inline result view may load generated media from (signed storage links).
+DEFAULT_MEDIA_DOMAINS = "https://*.r2.dev https://*.r2.cloudflarestorage.com https://*.snapgen.ai https://*.geminigen.ai"
 
 
 def _http_request(ctx: Context | None) -> Request | None:
@@ -35,10 +44,42 @@ def _http_request(ctx: Context | None) -> Request | None:
         return None
 
 
+# Hooks for a hosting layer that wraps this package (sign-in, upload storage). Plain local and self-hosted use
+# never sets them.
+
+ClientFactory = Callable[[Request], SnapGenClient]
+
+
+class UploadBackend(Protocol):
+    """Where hosted uploads go: opens an upload slot, then reports what was uploaded into it."""
+
+    async def create(self, api_key: str, request: Request) -> dict[str, Any]: ...
+
+    async def get(self, upload_id: str, api_key: str) -> dict[str, Any]: ...
+
+
+_client_factory: ClientFactory | None = None
+_upload_backend: UploadBackend | None = None
+
+
+def set_client_factory(factory: ClientFactory | None) -> None:
+    """Replace how an HTTP request becomes a SnapGenClient (e.g. resolve an OAuth token to the user's key)."""
+    global _client_factory
+    _client_factory = factory
+
+
+def set_upload_backend(backend: UploadBackend | None) -> None:
+    """Enable upload_media / get_upload over HTTP."""
+    global _upload_backend
+    _upload_backend = backend
+
+
 def get_client(ctx: Context | None = None) -> SnapGenClient:
     """Client for this call. Over HTTP the key comes from the request and only from the request."""
     request = _http_request(ctx)
     if request is not None:
+        if _client_factory is not None:
+            return _client_factory(request)
         key = extract_api_key(request.headers)
         if not key:
             raise SnapGenError(MISSING_KEY_MESSAGE)
@@ -216,10 +257,83 @@ async def generate_storyboard(
     return _job(await get_client(ctx).submit(spec.endpoint, fields))
 
 
-@mcp.tool()
+_UI_RESULT = {"ui": {"resourceUri": ui.RESULT_URI}, "ui/resourceUri": ui.RESULT_URI}
+_UI_UPLOAD = {"ui": {"resourceUri": ui.UPLOAD_URI}, "ui/resourceUri": ui.UPLOAD_URI}
+
+
+@mcp.tool(meta=_UI_RESULT)
 async def get_generation(uuid: str, ctx: Context | None = None) -> dict:
-    """Check a generation by uuid. When done is true, image_urls or video_urls hold the results."""
+    """Check a generation by uuid. When done is true, image_urls or video_urls hold the results.
+
+    Hosts that support inline views show the finished images and videos under this call.
+    """
     return _summarize(await get_client(ctx).get_history(uuid))
+
+
+def _caller_key(ctx: Context | None) -> str:
+    return get_client(ctx).api_key
+
+
+NO_UPLOADS_MESSAGE = ("This server does not accept uploads. Pass a public URL of the file in reference_*_urls, "
+                      "or run the server locally (stdio) and call upload_media with file_path.")
+
+
+@mcp.tool(meta=_UI_UPLOAD)
+async def upload_media(file_path: str | None = None, ctx: Context | None = None) -> dict:
+    """Upload a reference image, video or audio file so it can guide a generation. Free.
+
+    Use it when the user wants to use a file of their own (attached to the chat or on their computer) and you do not
+    already have a public URL for it. A web URL can go straight into reference_*_urls without uploading.
+
+    Local mode (stdio): pass file_path and the file is uploaded at once; the result holds its url.
+    Hosted mode: call without file_path. The result shows an upload view (or upload_url to open in a browser, or a
+    curl command if you have a shell with the file). After the user uploads, call get_upload with upload_id.
+    """
+    request = _http_request(ctx)
+    if request is None:
+        if not file_path:
+            raise SnapGenError("Pass file_path: the path of the image, video or audio file on this computer.")
+        import mimetypes
+        from pathlib import Path
+
+        path = Path(file_path).expanduser()
+        if not path.is_file():
+            raise SnapGenError(f"File not found: {path}")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        with path.open("rb") as fh:
+            result = await get_client(ctx).upload(path.name, fh, content_type)
+        return {"status": "done", "filename": path.name, **{k: result.get(k) for k in
+                ("url", "media_type", "content_type", "size", "expires_at")}}
+    if _upload_backend is None:
+        raise SnapGenError(NO_UPLOADS_MESSAGE)
+    return await _upload_backend.create(_caller_key(ctx), request)
+
+
+@mcp.tool()
+async def get_upload(upload_id: str, ctx: Context | None = None) -> dict:
+    """Check an upload started with upload_media (hosted mode). When status is done, url is ready for
+    reference_*_urls. Not needed in local mode: upload_media with file_path returns the url directly."""
+    if _http_request(ctx) is None or _upload_backend is None:
+        raise SnapGenError("get_upload is only for hosted uploads. In local mode upload_media returns the url directly.")
+    return await _upload_backend.get(upload_id, _caller_key(ctx))
+
+
+def _media_domains() -> list[str]:
+    return [d for d in os.environ.get("SNAPGEN_MCP_MEDIA_DOMAINS", DEFAULT_MEDIA_DOMAINS).split() if d]
+
+
+@mcp.resource(ui.RESULT_URI, name="snapgen-result", description="Inline preview of finished generations",
+              mime_type=ui.MIME, meta={"ui": {"csp": {"resourceDomains": _media_domains()}, "prefersBorder": False}})
+def result_view() -> str:
+    return ui.RESULT_HTML
+
+
+@mcp.resource(ui.UPLOAD_URI, name="snapgen-upload", description="File picker for reference uploads",
+              mime_type=ui.MIME, meta={"ui": {"csp": {"connectDomains": [
+                  d for d in [os.environ.get("SNAPGEN_MCP_PUBLIC_URL", "").rstrip("/")] if d]},
+                  "prefersBorder": True}})
+def upload_view() -> str:
+    return ui.UPLOAD_HTML
 
 
 @mcp.tool()
@@ -284,10 +398,17 @@ def transport_security_for(host: str, allowed_hosts: list[str] | None = None) ->
                                      allowed_origins=origins)
 
 
-def build_http_app(host: str = "127.0.0.1", allowed_hosts: list[str] | None = None) -> Starlette:
-    """The streamable HTTP app with Host checking chosen for this binding and GET/DELETE refused."""
+def build_http_app(host: str = "127.0.0.1", allowed_hosts: list[str] | None = None,
+                   routes: Sequence[BaseRoute] = (), middleware: Sequence[Middleware] = ()) -> Starlette:
+    """The streamable HTTP app with Host checking chosen for this binding and GET/DELETE refused.
+
+    `routes` and `middleware` let a hosting layer add its own endpoints and outer middleware.
+    """
     mcp.settings.transport_security = transport_security_for(host, allowed_hosts)
     app = mcp.streamable_http_app()
+    app.router.routes.extend(routes)
+    for m in middleware:
+        app.add_middleware(m.cls, *m.args, **m.kwargs)
     app.add_middleware(PostOnlyEndpoint, path=mcp.settings.streamable_http_path)
     return app
 

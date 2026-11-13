@@ -23,6 +23,8 @@
 - **🧠 Self-Describing** — `list_models` and `describe_model` tell the assistant which models exist, their options, limits and notes, so you do not have to explain them.
 - **🛡️ Checked Before You Pay** — Every request is validated against the model's rules first. Invalid options, too many references or a wrong tool are refused with a clear message before any credit is spent.
 - **🔑 Your Key, Every Request** — Over HTTP the key travels in a header, is never stored or logged, and the server never falls back to its own key. No OAuth to set up.
+- **📎 Uploads** — `upload_media` uploads your own image, video or audio file as a reference (local mode: pass the file path).
+- **🖼️ Inline Previews** — In hosts that support MCP Apps, finished images and videos show right in the chat.
 - **🐳 Ready to Host** — Stateless, runs as a non-root Docker image with a health check, so it works behind any load balancer.
 
 ## 🎯 Usage Guide
@@ -78,7 +80,9 @@
 | `generate_video` | yes | Start a video job, returns a uuid |
 | `extend_video` | yes | Continue a Veo, Grok or Seedance video from its last frame |
 | `generate_storyboard` | yes | Multi-scene Grok video (2–10 scenes) |
-| `get_generation` | no | Check a job; returns image or video URLs when done |
+| `get_generation` | no | Check a job; returns image or video URLs when done (inline preview where supported) |
+| `upload_media` | no | Upload a reference file from a local path (stdio); returns a URL for `reference_*_urls` |
+| `get_upload` | no | Hosted servers with an upload backend only; local mode does not need it |
 | `list_generations` | no | Recent history |
 
 Model-specific settings go in `options`, for example `generate_video(model="seedance-2-omni", options={"duration": 8})`.

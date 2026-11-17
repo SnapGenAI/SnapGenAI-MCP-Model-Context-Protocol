@@ -21,7 +21,7 @@ from typing import Protocol
 from starlette.middleware import Middleware
 from starlette.routing import BaseRoute
 
-from . import registry, ui
+from . import pricing, registry, ui
 from .auth import MISSING_KEY_MESSAGE, extract_api_key
 from .client import SnapGenClient, SnapGenError
 
@@ -169,10 +169,10 @@ async def list_models(kind: Literal["image", "video", "extend", "storyboard"] | 
     return {"count": len(items), "models": items}
 
 
-@mcp.tool(annotations=_READ_ONLY_LOCAL)
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 async def describe_model(model: str) -> dict:
-    """Show one model's options (with allowed values), reference-media limits, pricing and notes."""
-    return registry.get_model(model).describe()
+    """Show one model's options (with allowed values), reference-media limits, live credit prices and notes."""
+    return await pricing.describe(registry.get_model(model))
 
 
 @mcp.tool(annotations=_CREDIT_GENERATION)

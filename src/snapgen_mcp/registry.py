@@ -7,7 +7,7 @@ truth, and a false local rejection is worse than a clear backend error.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from .client import SnapGenError
@@ -63,8 +63,14 @@ class ModelSpec:
     exclusive_refs: bool = False  # only one kind of reference (URLs OR history uuids) per request
     min_prompt_len: int = 1
     premium: bool = False
-    pricing: str = ""
+    pricing: str = ""  # how the charge is computed; the numbers come from the live price list (pricing.py)
     notes: str = ""
+    # Name of the model in the public price list when it differs from send_model / id. The list holds one row per
+    # `<price_name>` or `<price_name>_<mode>`.
+    price_name: str | None = None
+    # What one listed price buys when the list's own price_unit is misleading: Kling always charges
+    # duration x price, and storyboards charge one grok-video clip price per scene.
+    price_per: str | None = None
 
     def describe(self) -> dict:
         refs: dict[str, Any] = {}
@@ -145,7 +151,7 @@ _add(ModelSpec(
     premium=True, summary="GPT Image 2.5 Lower: flat-rate, fixed quality at 720p output.",
     params={"aspect_ratio": P("str", choices=("1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "3:2", "2:3"),
                               default="1:1")},
-    history=Refs("ref_history", 10), pricing="Flat rate per image (docs say 2 credits; live estimate was 1, check estimated_credit).",
+    history=Refs("ref_history", 10), pricing="Flat rate per image.",
     notes="No mode/resolution/background options. No reference image URLs: only previous generation uuids.",
 ))
 _add(ModelSpec(
@@ -156,7 +162,7 @@ _add(ModelSpec(
         "resolution": P("str", choices=("480p", "720p"), default="480p"),
     },
     image_urls=Refs("file_url", 1), history=Refs("ref_history", 1), exclusive_refs=True,
-    pricing="Flat rate per request.",
+    pricing="Flat rate per request.", price_name="vela-ai-image",
     notes="Provide at most ONE reference (image URL or history uuid).",
 ))
 
@@ -179,12 +185,13 @@ for _m, _s, _res in (
         },
         image_urls=Refs("ref_images", 3),
         video_urls=Refs("ref_videos") if _m == "omni-flash" else None,
+        pricing="Flat price per video, by resolution (and duration for omni-flash).",
         notes="In frame mode, send images in order: start frame first, end frame second.",
     ))
 _add(ModelSpec(
     id="veo-extend", family="veo", kind="extend", endpoint="/video-extend/veo",
     summary="Continue a Veo video from its last frame. Model, aspect ratio and resolution are inherited.",
-    history=Refs("ref_history", 1, min=1),
+    history=Refs("ref_history", 1, min=1), pricing="Charged the original video's model price (call describe_model on that model).",
 ))
 
 # ---------------------------------------------------------------- video: Grok family
@@ -202,7 +209,8 @@ _add(ModelSpec(
                           default="landscape"),
         **_GROK_COMMON,
     },
-    image_urls=Refs("file_urls"), history=Refs("ref_images"), exclusive_refs=True,
+    image_urls=Refs("file_urls"), history=Refs("ref_images"), exclusive_refs=True, price_name="grok-video",
+    pricing="Flat price per clip, by resolution x duration.",
     notes="Use only one reference method per request: image URLs OR history uuids.",
 ))
 _add(ModelSpec(
@@ -214,6 +222,7 @@ _add(ModelSpec(
         **_GROK_COMMON,
     },
     image_urls=Refs("file_urls", 5), history=Refs("ref_images", 5), exclusive_refs=True,
+    pricing="Flat price per clip, by resolution x duration.",
     notes="With 2+ images, refer to them in the prompt as @image1, @image2... 1 image = first frame. "
           "Use only one reference method per request.",
 ))
@@ -226,11 +235,12 @@ _add(ModelSpec(
         **_GROK_COMMON,
     },
     image_urls=Refs("file_urls", 1), history=Refs("ref_images", 1), exclusive_refs=True,
-    pricing="480p: 3/5/7 credits (6/10/15s). 720p: 4/7/10. 1080p: 12/20/30.",
+    pricing="Flat price per clip, by resolution x duration.",
 ))
 _add(ModelSpec(
     id="grok-extend", family="grok", kind="extend", endpoint="/video-extend/grok",
     summary="Continue a Grok video from its last frame.", history=Refs("ref_history", 1, min=1),
+    pricing="Charged the original video's model price (call describe_model on that model).",
 ))
 _add(ModelSpec(
     id="grok-1.5-lite-extend", family="grok", kind="extend", endpoint="/video-extend/grok-1.5-lite", premium=True,
@@ -242,7 +252,7 @@ _add(ModelSpec(
         "skip_audio": P("bool"),
     },
     history=Refs("ref_history", 1, min=1),
-    pricing="Same as grok-1.5-lite.",
+    pricing="Same as grok-1.5-lite.", price_name="grok-1.5-lite",
 ))
 _add(ModelSpec(
     id="grok-storyboard", family="grok", kind="storyboard", endpoint="/video-storyboard/grok", premium=True,
@@ -252,7 +262,8 @@ _add(ModelSpec(
         "aspect_ratio": P("str", choices=("landscape", "portrait", "square"), default="landscape"),
         "resolution": P("str", choices=("480p", "720p"), default="480p"),
     },
-    pricing="Charged per scene.",
+    pricing="Each scene is charged the grok-3 clip price for its duration at the storyboard resolution.",
+    price_per="scene",
     notes="Each scene: prompt + duration (6 or 10s). Max 45s total.",
 ))
 
@@ -266,9 +277,9 @@ for _m, _s, _modes, _dur, _imgs, _vid, _aud, _price in (
     ("seedance-2-5-omni", "Seedance 2.5 Omni: up to 30s, up to 14 reference images.", ("pro-vip",),
      P("int", min=4, max=30), 14, 1, 4, ""),
     ("sd-2-lower", "Seedance 2 Lower: cost-effective.", ("lower",),
-     P("int", choices=(5, 10, 15)), 4, None, None, "4 credits per second."),
+     P("int", choices=(5, 10, 15)), 4, None, None, "Flat price per clip, by duration."),
     ("sd-2-5-lower", "Seedance 2.5 Lower: cost-effective, up to 30s.", ("lower",),
-     P("int", choices=(5, 10, 30)), 4, None, None, "5 credits per second."),
+     P("int", choices=(5, 10, 30)), 4, None, None, "Flat price per clip, by duration."),
 ):
     _add(ModelSpec(
         id=_m, family="seedance", kind="video", endpoint="/video-gen/seedance", send_model=_m, summary=_s,
@@ -285,7 +296,7 @@ for _m, _s, _modes, _dur, _imgs, _vid, _aud, _price in (
 _add(ModelSpec(
     id="seedance-extend", family="seedance", kind="extend", endpoint="/video-extend/seedance",
     summary="Continue a Seedance video. All settings inherit from the original.",
-    history=Refs("ref_history", 1, min=1),
+    history=Refs("ref_history", 1, min=1), pricing="Charged the original video's model price (call describe_model on that model).",
 ))
 
 # ---------------------------------------------------------------- video: Kling
@@ -320,7 +331,8 @@ for _m, (_s, _modes, _dur, _needs_video) in _KLING.items():
         id=_m, family="kling", kind="video", endpoint="/video-gen/kling", send_model=_m, summary=_s,
         params=_p, image_urls=Refs("ref_images", 4, min=1 if _m in _KLING_NEEDS_IMAGE else 0),
         video_urls=Refs("ref_videos", 1, min=1 if _needs_video else 0),
-        min_prompt_len=10,
+        min_prompt_len=10, price_per="second",
+        pricing=("Credits per second of the reference video." if _needs_video else "Duration x credits per second."),
         notes=("Requires one reference video (reference_video_urls); duration follows that video. "
                "A reference image is recommended." if _needs_video else
                "Prompt must be at least 10 characters. Reference videos are optional."
@@ -344,8 +356,7 @@ _add(ModelSpec(
         "mode_image": _K4_MODE_IMAGE,
     },
     image_urls=Refs("ref_images", 10), video_urls=Refs("ref_videos", 2), min_prompt_len=10,
-    pricing="Docs: 15 credits/s at 720p, 22 credits/s at 1080p (checked live: 3s at 720p cost 45). "
-            + _K4_REF_VIDEO_CHARGE,
+    pricing="Duration x credits per second. " + _K4_REF_VIDEO_CHARGE, price_per="second",
     notes="Prompt at least 10 characters. Up to 10 images; up to 2 reference videos of at most 30s each. "
           "With reference videos attached, images are always used as references, never as start/end frames.",
 ))
@@ -360,7 +371,7 @@ _add(ModelSpec(
         "mode_image": _K4_MODE_IMAGE,
     },
     image_urls=Refs("ref_images", 10), video_urls=Refs("ref_videos", 2), min_prompt_len=10,
-    pricing="Docs: 11 credits/s (checked live: 3s cost 33). " + _K4_REF_VIDEO_CHARGE,
+    pricing="Duration x credits per second. " + _K4_REF_VIDEO_CHARGE, price_per="second",
     notes="Prompt at least 10 characters. Start frame only (no end frame). Up to 10 images; up to 2 reference "
           "videos of at most 20s each. With reference videos attached, images are always used as references.",
 ))
@@ -370,8 +381,7 @@ _add(ModelSpec(
     summary="Kling 4.0 Motion Control: copies the movement of a reference video onto the character in an image.",
     params={"mode": P("str", "Output resolution.", choices=("720p", "1080p"), default="720p")},
     image_urls=Refs("ref_images", 1, min=1), video_urls=Refs("ref_videos", 1, min=1), min_prompt_len=10,
-    pricing="Docs: 18 credits/s at 720p, 25 credits/s at 1080p, per second of the motion video, no extra "
-            "reference video charge (checked live: a 10s motion video at 720p cost 180).",
+    pricing="Credits per second of the motion video, no extra reference video charge.", price_per="second",
     notes="Requires exactly one character image (reference_image_urls) and one motion video up to 30s "
           "(reference_video_urls). Duration and aspect ratio come from the motion video and cannot be set.",
 ))
@@ -420,33 +430,6 @@ _add(ModelSpec(
     image_urls=Refs("file_urls", 1), history=Refs("ref_history", 1), exclusive_refs=True,
     notes="At most ONE reference (image URL or image history uuid). Resolution is fixed.",
 ))
-
-
-# ---------------------------------------------------------------- observed pricing
-# Estimated credits returned by the live API on 2026-10-20 at the cheapest settings. These are snapshots, not
-# a price list: the docs differ for some models and prices change. Always trust estimated_credit on submit.
-_OBSERVED = {
-    "nano-banana-pro": "~3 credits (1K)", "nano-banana-2": "~3 credits (1K)", "nano-banana-2-lite": "~3 credits (1K)",
-    "grok-image": "~4 credits (1 image, SPEED)", "gpt-image-2": "~3 credits (low, 1K)",
-    "gpt-image-2.5-lower": "~1 credit", "vela-image": "~1 credit",
-    "veo-3.1": "~100 credits (4s, 720p)", "veo-3.1-fast": "~4 credits (4s, 720p)",
-    "veo-3.1-lite": "~4 credits (4s, 720p)", "veo-2": "~20 credits (8s)", "omni-flash": "~15 credits (10s)",
-    "veo-extend": "~4 credits",
-    "grok-3": "~15 credits (6s, 480p)", "grok-lower": "~8 credits (6s, 480p)",
-    "grok-extend": "~15 credits", "grok-storyboard": "~15 credits per 6s scene (480p)",
-    "seedance-2-omni": "~108 credits (4s)", "seedance-2-mini": "~84 credits (4s)",
-    "seedance-2-5-omni": "~332 credits (4s)", "sd-2-lower": "~6 credits (5s)",
-    "minimax-h3": "~30 credits/s (5s cost 150, 6s cost 180)", "flux-3": "~34 credits/s (5s cost 170, 6s cost 204)",
-    "vela-ai-video": "~1 credit", "muse-ai-video": "~0 credits observed (may be promotional)",
-    "kling-video-3-0": "~11 credits/s (3s cost 33, 5s cost 55, standard)", "kling-video-2-6": "~30 credits (5s, standard)",
-    "kling-video-2-5": "~15 credits (5s, relax)", "kling-video-2-1-5s": "~35 credits (standard)",
-    "kling-video-2-1-10s": "~30 credits (standard)",
-    "kling-video-motion-3": "~100 credits (scales with the reference video length)",
-    "kling-video-motion": "~60 credits (scales with the reference video length)",
-    "kling-video-3-0-edit": "~120 credits (scales with the reference video length)",
-}
-for _id, _txt in _OBSERVED.items():
-    _REGISTRY[_id] = replace(_REGISTRY[_id], pricing=f"Observed estimate: {_txt}.")
 
 
 # ---------------------------------------------------------------- public API

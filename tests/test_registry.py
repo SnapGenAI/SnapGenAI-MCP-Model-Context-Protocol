@@ -166,9 +166,11 @@ def test_kling_image_required_models_and_removed_16():
         registry.get_model("kling-video-1-6-5s")
 
 
-def test_every_priced_model_exists_and_has_observed_pricing():
-    assert registry.get_model("veo-3.1").pricing.startswith("Observed estimate")
-    assert "332" in registry.get_model("seedance-2-5-omni").pricing
+def test_registry_ships_no_price_numbers():
+    # Numbers come from the live price list (pricing.py); a hard-coded one goes stale silently.
+    import re
+    for m in registry.all_models():
+        assert not re.search(r"\d+\s*credits?", m.pricing), (m.id, m.pricing)
 
 
 def test_kling4_models_resolution_is_the_mode():
@@ -223,6 +225,6 @@ def test_kling_25_and_26_accept_only_5_or_10_seconds_but_30_takes_3_to_15():
     assert build("kling-video-3-0", options={"duration": 15})[1]["duration"] == 15
 
 
-def test_flux_and_minimax_pricing_notes_state_the_per_second_rate():
-    assert "34 credits/s" in registry.get_model("flux-3").pricing
-    assert "30 credits/s" in registry.get_model("minimax-h3").pricing
+def test_flux_and_minimax_pricing_notes_say_per_second():
+    assert "per second" in registry.get_model("flux-3").pricing
+    assert "per second" in registry.get_model("minimax-h3").pricing

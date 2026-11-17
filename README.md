@@ -75,7 +75,7 @@
 |---|---|---|
 | `get_account` | no | Plan and credit balance |
 | `list_models` | no | Models, filterable by `kind` (image, video, extend, storyboard) or `family` |
-| `describe_model` | no | One model's options with allowed values, reference limits, pricing notes |
+| `describe_model` | no | One model's options with allowed values, reference limits, and live credit prices |
 | `generate_image` | yes | Start an image job, returns a uuid |
 | `generate_video` | yes | Start a video job, returns a uuid |
 | `extend_video` | yes | Continue a Veo, Grok or Seedance video from its last frame |
@@ -103,7 +103,7 @@ Model-specific settings go in `options`, for example `generate_video(model="seed
 | **Muse** | `muse-ai-video` |
 
 > [!NOTE]
-> Some models need a Premium plan, and a model can be temporarily unavailable when the SnapGen service is under maintenance or heavy load. The error message says which. `describe_model` shows each model's plan requirement and pricing notes.
+> Some models need a Premium plan, and a model can be temporarily unavailable when the SnapGen service is under maintenance or heavy load. The error message says which. `describe_model` shows each model's plan requirement and its current prices, read live from SnapGen's public price list (cached for 5 minutes).
 
 The catalog is driven by [`src/snapgen_mcp/registry.py`](src/snapgen_mcp/registry.py). **Adding a model** takes one `ModelSpec` entry and a test; nothing else changes. It was built from the [SnapGen API docs](https://docs.snapgen.ai), and where the docs were ambiguous the validation is permissive and the backend is the source of truth.
 

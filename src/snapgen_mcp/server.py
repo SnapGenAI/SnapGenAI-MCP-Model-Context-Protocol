@@ -9,6 +9,7 @@ from typing import Any, Literal
 import uvicorn
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
@@ -20,13 +21,20 @@ from typing import Protocol
 from starlette.middleware import Middleware
 from starlette.routing import BaseRoute
 
-from . import registry, ui
+from . import pricing, registry, ui
 from .auth import MISSING_KEY_MESSAGE, extract_api_key
 from .client import SnapGenClient, SnapGenError
 
 # Stateless: every HTTP request is self-contained (it carries its own key), so no session affinity is needed
 # and the server can sit behind any load balancer. These settings only affect the HTTP transport.
 mcp = FastMCP("snapgen", stateless_http=True, json_response=True)
+
+# Explicit MCP hints let clients distinguish local catalog lookups, account reads,
+# uploads, and credit-consuming generation actions before invoking them.
+_READ_ONLY_LOCAL = ToolAnnotations(readOnlyHint=True, openWorldHint=False, destructiveHint=False)
+_READ_ONLY_REMOTE = ToolAnnotations(readOnlyHint=True, openWorldHint=True, destructiveHint=False)
+_UPLOAD_REMOTE = ToolAnnotations(readOnlyHint=False, openWorldHint=True, destructiveHint=False)
+_CREDIT_GENERATION = ToolAnnotations(readOnlyHint=False, openWorldHint=True, destructiveHint=True)
 
 _client: SnapGenClient | None = None  # stdio / dev only
 
@@ -132,7 +140,7 @@ def _summarize(h: dict) -> dict:
     return out
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 async def get_account(ctx: Context | None = None) -> dict:
     """Show the connected snapgen.ai account: plan and credit balance (available and locked)."""
     acct = await get_client(ctx).account()
@@ -145,7 +153,7 @@ async def get_account(ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_LOCAL)
 async def list_models(kind: Literal["image", "video", "extend", "storyboard"] | None = None,
                       family: str | None = None) -> dict:
     """List available models, optionally filtered by kind (image, video, extend, storyboard) or family.
@@ -161,13 +169,13 @@ async def list_models(kind: Literal["image", "video", "extend", "storyboard"] | 
     return {"count": len(items), "models": items}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 async def describe_model(model: str) -> dict:
-    """Show one model's options (with allowed values), reference-media limits, pricing and notes."""
-    return registry.get_model(model).describe()
+    """Show one model's options (with allowed values), reference-media limits, live credit prices and notes."""
+    return await pricing.describe(registry.get_model(model))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CREDIT_GENERATION)
 async def generate_image(
     prompt: str,
     model: str = "nano-banana-pro",
@@ -187,7 +195,7 @@ async def generate_image(
     return _job(await get_client(ctx).submit(endpoint, fields))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CREDIT_GENERATION)
 async def generate_video(
     prompt: str,
     model: str = "veo-3.1-fast",
@@ -211,7 +219,7 @@ async def generate_video(
     return _job(await get_client(ctx).submit(endpoint, fields))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CREDIT_GENERATION)
 async def extend_video(
     model: Literal["veo-extend", "grok-extend", "grok-1.5-lite-extend", "seedance-extend"],
     video_uuid: str,
@@ -230,7 +238,7 @@ async def extend_video(
     return _job(await get_client(ctx).submit(endpoint, fields))
 
 
-@mcp.tool()
+@mcp.tool(annotations=_CREDIT_GENERATION)
 async def generate_storyboard(
     scenes: list[dict[str, Any]],
     aspect_ratio: Literal["landscape", "portrait", "square"] = "landscape",
@@ -261,7 +269,7 @@ _UI_RESULT = {"ui": {"resourceUri": ui.RESULT_URI}, "ui/resourceUri": ui.RESULT_
 _UI_UPLOAD = {"ui": {"resourceUri": ui.UPLOAD_URI}, "ui/resourceUri": ui.UPLOAD_URI}
 
 
-@mcp.tool(meta=_UI_RESULT)
+@mcp.tool(annotations=_READ_ONLY_REMOTE, meta=_UI_RESULT)
 async def get_generation(uuid: str, ctx: Context | None = None) -> dict:
     """Check a generation by uuid. When done is true, image_urls or video_urls hold the results.
 
@@ -278,7 +286,7 @@ NO_UPLOADS_MESSAGE = ("This server does not accept uploads. Pass a public URL of
                       "or run the server locally (stdio) and call upload_media with file_path.")
 
 
-@mcp.tool(meta=_UI_UPLOAD)
+@mcp.tool(annotations=_UPLOAD_REMOTE, meta=_UI_UPLOAD)
 async def upload_media(file_path: str | None = None, ctx: Context | None = None) -> dict:
     """Upload a reference image, video or audio file so it can guide a generation. Free.
 
@@ -309,7 +317,7 @@ async def upload_media(file_path: str | None = None, ctx: Context | None = None)
     return await _upload_backend.create(_caller_key(ctx), request)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 async def get_upload(upload_id: str, ctx: Context | None = None) -> dict:
     """Check an upload started with upload_media (hosted mode). When status is done, url is ready for
     reference_*_urls. Not needed in local mode: upload_media with file_path returns the url directly."""
@@ -336,7 +344,7 @@ def upload_view() -> str:
     return ui.UPLOAD_HTML
 
 
-@mcp.tool()
+@mcp.tool(annotations=_READ_ONLY_REMOTE)
 async def list_generations(
     type: Literal["all", "image", "video"] = "all", page: int = 1, per_page: int = 10,
     ctx: Context | None = None,

@@ -23,6 +23,7 @@ async def test_get_account():
     out = await server.get_account()
     assert out == {"name": "Demo", "plan_id": "FP0001", "available_credit": 100, "locked_credit": 5}
     assert route.calls[0].request.headers["x-api-key"] == "test-key"
+    assert route.calls[0].request.headers["user-agent"].startswith("snapgen-mcp/")
 
 
 @respx.mock

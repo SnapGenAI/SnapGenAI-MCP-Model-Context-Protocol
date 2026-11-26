@@ -6,6 +6,7 @@ user's API key to uapi, which does auth, pricing, credit locking and billing.
 from __future__ import annotations
 
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from collections.abc import Awaitable, Callable
 from typing import IO, Any
@@ -15,6 +16,17 @@ import httpx
 from .auth import CREATE_KEY_URL
 
 DEFAULT_BASE_URL = "https://api.snapgen.ai"
+
+
+def _user_agent() -> str:
+    # UA riêng để lọc được traffic MCP trong log ingress (thay vì "python-httpx/x.y" mặc định).
+    try:
+        return f"snapgen-mcp/{version('snapgen-mcp')}"
+    except PackageNotFoundError:
+        return "snapgen-mcp"
+
+
+USER_AGENT = _user_agent()
 TOP_UP_URL = "https://snapgen.ai/pricing"
 RECONNECT_MESSAGE = ("Your SnapGen sign-in is no longer valid (its API key was deleted or your plan changed). "
                      "Reconnect SnapGen in your assistant's connector settings and sign in again.")
@@ -101,7 +113,7 @@ class SnapGenClient:
             )
         async with httpx.AsyncClient(
             base_url=f"{self.base_url}/uapi/v1",
-            headers={"x-api-key": self.api_key, "Accept": "application/json"},
+            headers={"x-api-key": self.api_key, "Accept": "application/json", "User-Agent": USER_AGENT},
             transport=self._transport,
             timeout=self._timeout,
         ) as http:
